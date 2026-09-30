@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+bun_bin=${INFOMENTOR_SE_BUN:-bun}
+
+if ! command -v "$bun_bin" >/dev/null 2>&1; then
+  printf 'Bun is required but was not found. Install it separately: https://bun.com/docs/installation\n' >&2
+  exit 127
+fi
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "$bun_bin" "$repo_dir/src/cli.ts" "$@"

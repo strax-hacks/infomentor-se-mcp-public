@@ -1,0 +1,49 @@
+{
+  "name": "infomentor-se-mcp",
+  "version": "0.11.0",
+  "private": true,
+  "description": "Local MCP server for Swedish InfoMentor parent accounts with direct HTTP login",
+  "keywords": [
+    "infomentor",
+    "mcp",
+    "school",
+    "sweden"
+  ],
+  "homepage": "https://github.com/strax-hacks/infomentor-se-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/strax-hacks/infomentor-se-mcp/issues"
+  },
+  "license": "MIT",
+  "author": "Ólafur Nils Sigurðsson",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/strax-hacks/infomentor-se-mcp.git"
+  },
+  "type": "module",
+  "scripts": {
+    "start": "bun src/cli.ts",
+    "login": "bun src/cli.ts login",
+    "check": "tsc --noEmit",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "test": "bun test --timeout 30000",
+    "lint": "oxlint --deny-warnings --report-unused-disable-directives-severity error src test",
+    "typecheck": "tsc --noEmit",
+    "lint:fix": "bun run lint --fix"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "htmlparser2": "^12.0.0",
+    "tough-cookie": "^6.0.2",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@types/bun": "^1.2.19",
+    "@types/node": "^22.20.2",
+    "oxfmt": "0.67.0",
+    "oxlint": "1.82.0",
+    "typescript": "7.0.2"
+  },
+  "packageManager": "bun@1.4.2"
+}

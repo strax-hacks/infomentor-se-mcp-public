@@ -1,0 +1,23 @@
+node_modules/
+.env
+.env.*
+!.env.example
+coverage/
+*.tsbuildinfo
+
+# Authentication material and cookies must never enter the source repository.
+*session*.json
+*cookies*.json
+*storage-state*.json
+credentials.json
+*-token.json
+token.json
+token.txt
+
+# Local/editor state.
+*.checkouts/
+*.pending
+*.tmp
+*.lock/
+.DS_Store
+.worktrees/
