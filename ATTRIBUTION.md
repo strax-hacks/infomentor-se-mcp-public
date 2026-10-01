@@ -37,5 +37,7 @@ affiliates. No InfoMentor logos or official branding are used. This notice does
 not grant rights to the InfoMentor service or content; use remains subject to the
 provider's applicable terms.
 
-The repository and package are currently private/local-only. No public release,
-package publication, or official InfoMentor relationship is claimed.
+The repository is an independent source distribution and makes no claim of
+official InfoMentor affiliation, package publication, or access to InfoMentor
+service content. Users must provide their own authorized account and comply
+with the provider's applicable terms.

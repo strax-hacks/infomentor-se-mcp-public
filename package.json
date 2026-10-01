@@ -9,15 +9,15 @@
     "school",
     "sweden"
   ],
-  "homepage": "https://github.com/strax-hacks/infomentor-se-mcp#readme",
+  "homepage": "https://github.com/strax-hacks/infomentor-se-mcp-public#readme",
   "bugs": {
-    "url": "https://github.com/strax-hacks/infomentor-se-mcp/issues"
+    "url": "https://github.com/strax-hacks/infomentor-se-mcp-public/issues"
   },
   "license": "MIT",
   "author": "Ólafur Nils Sigurðsson",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/strax-hacks/infomentor-se-mcp.git"
+    "url": "git+https://github.com/strax-hacks/infomentor-se-mcp-public.git"
   },
   "type": "module",
   "scripts": {
