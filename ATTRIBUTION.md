@@ -17,14 +17,14 @@ commit `133a0a4ffd09ff0a761048222b58cbffb5e20fd5`.
   `@modelcontextprotocol/server` TypeScript SDK package, which is MIT-licensed
   and is installed from the lockfile rather than vendored here. Project-specific
   tool-result and HTTP-body handling lives in this repository's own source.
-- Bun is an execution and package-management prerequisite installed separately
-  by each user. This repository does not bundle Bun, distribute its binary, or
-  compile a single-file executable.
+- Bun 1.4.2 remains the source-development and package-management prerequisite.
+  The npm distribution runs on Node.js 20+ and does not bundle Bun, distribute its
+  binary, or compile a single-file executable.
 
 The root [`LICENSE`](LICENSE) is MIT, matching the upstream Swedish package and
 session-store license. Third-party npm dependencies retain their own licenses;
-this project does not relicense them. The package manifest remains `private` to
-prevent accidental npm publication.
+this project does not relicense them. The manifest supports an npm distribution,
+but publication is a separate maintainer-controlled release step.
 
 ## InfoMentor name and marks
 

@@ -8,6 +8,8 @@ import {
   writePrivateFile,
 } from "./shared/session-store/index.js";
 import { z } from "zod";
+import { calendarEventSchema, type CalendarEvent } from "./calendar.js";
+import { newsItemSchema, type NewsItem } from "./news.js";
 import {
   InfoMentorError,
   PARENT_URL,
@@ -32,7 +34,25 @@ export const collectRequestSchema = z
 
 const childSchema = pupilSchema.omit({ selected: true });
 
-const collectedNotificationSchema = notificationSchema.omit({ currentlySelectedPupil: true });
+const collectedNewsDetailSchema = newsItemSchema
+  .omit({ notification: true, retrievedAt: true })
+  .extend({ kind: z.literal("news") });
+
+const collectedCalendarDetailSchema = calendarEventSchema
+  .omit({ notification: true, retrievedAt: true })
+  .extend({ kind: z.literal("calendar") });
+
+const notificationDetailSchema = z.discriminatedUnion("kind", [
+  collectedNewsDetailSchema,
+  collectedCalendarDetailSchema,
+]);
+
+const collectedNotificationSchema = notificationSchema
+  .omit({ currentlySelectedPupil: true })
+  .extend({
+    detailStatus: z.enum(["resolved", "not_supported"]),
+    detail: notificationDetailSchema.optional(),
+  });
 
 const kindSchema = z.enum(["child", "timetable", "message", "notification"]);
 
@@ -130,6 +150,9 @@ export type CollectionSource = {
   ): Promise<z.infer<typeof messagesPageSchema>>;
   getMessage(id: number, signal: AbortSignal): Promise<z.infer<typeof messageDetailSchema>>;
   getNotifications(signal: AbortSignal): Promise<z.infer<typeof notificationsDataSchema>>;
+  /** Resolve notification references for the high-level collection workflow. */
+  resolveNewsItem?: (notificationId: number, signal: AbortSignal) => Promise<NewsItem>;
+  resolveCalendarEvent?: (notificationId: number, signal: AbortSignal) => Promise<CalendarEvent>;
 };
 
 const fingerprintSchema = referenceSchema.omit({ childIds: true }).extend({
@@ -340,6 +363,74 @@ async function collectFolderMessages(
   return skipped;
 }
 
+async function resolveCollectedNotification(
+  item: z.infer<typeof notificationSchema>,
+  source: CollectionSource,
+  signal: AbortSignal,
+): Promise<z.infer<typeof collectedNotificationSchema>> {
+  throwIfAborted(signal);
+
+  if (item.type === "NewsItem") {
+    if (!source.resolveNewsItem)
+      throw new InfoMentorError(
+        "INVALID_CONFIGURATION",
+        `The high-level collection source cannot resolve NewsItem notification ${item.id}; no cursor was advanced.`,
+      );
+
+    try {
+      const resolved = await source.resolveNewsItem(item.id, signal);
+      const { notification: _notification, retrievedAt: _retrievedAt, ...detail } = resolved;
+      return collectedNotificationSchema.parse({
+        ...item,
+        detailStatus: "resolved",
+        detail: collectedNewsDetailSchema.parse({ kind: "news", ...detail }),
+      });
+    } catch (error) {
+      if (error instanceof InfoMentorError)
+        throw new InfoMentorError(
+          error.code,
+          `InfoMentor could not resolve NewsItem notification ${item.id}; no cursor was advanced.`,
+          error.retryAfterMs,
+        );
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        `InfoMentor returned invalid details for NewsItem notification ${item.id}; no cursor was advanced.`,
+      );
+    }
+  }
+
+  if (item.type === "CalendarV2" || item.type === "CalendarV2EventCreated") {
+    if (!source.resolveCalendarEvent)
+      throw new InfoMentorError(
+        "INVALID_CONFIGURATION",
+        `The high-level collection source cannot resolve ${item.type} notification ${item.id}; no cursor was advanced.`,
+      );
+
+    try {
+      const resolved = await source.resolveCalendarEvent(item.id, signal);
+      const { notification: _notification, retrievedAt: _retrievedAt, ...detail } = resolved;
+      return collectedNotificationSchema.parse({
+        ...item,
+        detailStatus: "resolved",
+        detail: collectedCalendarDetailSchema.parse({ kind: "calendar", ...detail }),
+      });
+    } catch (error) {
+      if (error instanceof InfoMentorError)
+        throw new InfoMentorError(
+          error.code,
+          `InfoMentor could not resolve ${item.type} notification ${item.id}; no cursor was advanced.`,
+          error.retryAfterMs,
+        );
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        `InfoMentor returned invalid details for ${item.type} notification ${item.id}; no cursor was advanced.`,
+      );
+    }
+  }
+
+  return collectedNotificationSchema.parse({ ...item, detailStatus: "not_supported" });
+}
+
 /** The caller holds the authenticated account lock for this entire operation. */
 export async function collectUpdates(
   request: CollectRequest,
@@ -459,7 +550,7 @@ export async function collectUpdates(
             kind: "notification",
             sourceId: JSON.stringify([item.pupilSourceId, item.id]),
             childIds: [],
-            data: collectedNotificationSchema.parse(item),
+            data: await resolveCollectedNotification(item, source, signal),
           },
           child.id,
         );

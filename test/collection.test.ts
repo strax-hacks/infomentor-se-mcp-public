@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "bun:test";
 import { collectUpdates, collectionSchema, type CollectionSource } from "../src/collection.js";
+import { type CalendarEvent } from "../src/calendar.js";
+import { type NewsItem } from "../src/news.js";
 import { InfoMentorError, throwIfAborted, type Notifications } from "../src/session.js";
 
 const summary = (id: number) => ({
@@ -30,6 +32,8 @@ function sourceFor(sessionFile: string) {
     duplicateNoticeId: false,
     renameDuringScan: false,
     detailReads: 0,
+    notificationKind: "MessageCreated" as "MessageCreated" | "NewsItem" | "CalendarV2EventCreated",
+    notificationUrl: "/#/message/show/11",
     skipped: { timetable: 0, messages: 0, notifications: 0 },
   };
 
@@ -134,10 +138,10 @@ function sourceFor(sessionFile: string) {
         subTitle: "",
         subjectsCourses: "",
         dateSent: "2026-09-11",
-        appType: "Message",
+        appType: state.notificationKind === "NewsItem" ? "News" : "Message",
         state: "Cleared",
-        type: "MessageCreated",
-        url: "/#/message/show/11",
+        type: state.notificationKind,
+        url: state.notificationUrl,
         pupilIM2Id: 1,
         pupilSourceId: "first",
         currentlySelectedPupil: state.selected === "first",
@@ -153,7 +157,85 @@ function sourceFor(sessionFile: string) {
     },
   };
 
-  return { source, state };
+  const enrichedSource = source as CollectionSource & {
+    resolveNewsItem: (notificationId: number, signal?: AbortSignal) => Promise<NewsItem>;
+    resolveCalendarEvent: (notificationId: number, signal?: AbortSignal) => Promise<CalendarEvent>;
+  };
+  enrichedSource.resolveNewsItem = async (notificationId, signal) => {
+    throwIfAborted(signal);
+    return {
+      notification: {
+        id: notificationId,
+        title: "Synthetic news",
+        subTitle: "",
+        subjectsCourses: "",
+        dateSent: "2026-09-11",
+        appType: "News",
+        state: "Cleared",
+        type: "NewsItem",
+        url: "/#/communication/news/9002",
+        pupilIM2Id: 1,
+        pupilSourceId: "1|first|SYNTHETIC",
+        currentlySelectedPupil: true,
+      },
+      newsId: 9002,
+      title: "Synthetic news",
+      contentHtml: "<p>Synthetic article body</p>",
+      bodyText: "Synthetic article body",
+      publishedDate: "2026-09-11",
+      publishedDateString: "11 Sep 2026",
+      publishedBy: "Synthetic teacher",
+      newsImageUrl: null,
+      newsThumbnailImageUrl: null,
+      links: [],
+      images: [],
+      attachments: [],
+      skipped: 0,
+      retrievedAt: "2026-09-11T08:00:00.000Z",
+    } as NewsItem;
+  };
+  enrichedSource.resolveCalendarEvent = async (notificationId, signal) => {
+    throwIfAborted(signal);
+    return {
+      notification: {
+        id: notificationId,
+        title: "Synthetic calendar event",
+        subTitle: "",
+        subjectsCourses: "",
+        dateSent: "2026-09-11",
+        appType: "Calendar",
+        state: "Cleared",
+        type: "CalendarV2EventCreated",
+        url: "/#/calendarv2/whole_week?selectedYear=2026&selectedWeek=37&eventId=9003",
+        pupilIM2Id: 1,
+        pupilSourceId: "1|first|SYNTHETIC",
+        currentlySelectedPupil: true,
+      },
+      eventId: 9003,
+      childId: "first",
+      title: "Synthetic homework",
+      text: "Synthetic homework details",
+      description: "Synthetic homework details",
+      subjects: [{ id: 1, title: "Synthetic subject" }],
+      courses: [],
+      calendarEntryTypeId: 2,
+      isAllDayEvent: true,
+      startDateFull: "2026-09-11T00:00:00",
+      endDateFull: "2026-09-11T23:59:59",
+      startDate: "2026-09-11",
+      endDate: "2026-09-11",
+      formattedStartDate: "11 Sep 2026",
+      formattedEndDate: "11 Sep 2026",
+      startTime: null,
+      endTime: null,
+      hasAttachments: false,
+      url: null,
+      skipped: 0,
+      retrievedAt: "2026-09-11T08:00:00.000Z",
+    } as CalendarEvent;
+  };
+
+  return { source: enrichedSource, state };
 }
 
 const subtest = async (_name: string, work: () => Promise<void>): Promise<void> => work();
@@ -326,6 +408,39 @@ test("collection snapshots replay deltas, preserve context, and fail without adv
         await assert.rejects(stat(sessionFile + ".collections"), { code: "ENOENT" });
       },
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("high-level collection resolves supported notification details", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "infomentor-collection-details-"));
+
+  try {
+    const { source, state } = sourceFor(join(directory, "news.json"));
+    state.notificationKind = "NewsItem";
+    state.notificationUrl = "/#/communication/news/9002";
+    const news = await collectUpdates({ includeExisting: true }, source);
+    collectionSchema.parse(news);
+    const newsUpdate = news.updates.find((update) => update.kind === "notification");
+    assert.ok(newsUpdate);
+    assert.equal(newsUpdate.data.detailStatus, "resolved");
+    assert.equal(newsUpdate.data.detail?.kind, "news");
+    assert.equal(newsUpdate.data.detail?.bodyText, "Synthetic article body");
+    assert.ok(!("retrievedAt" in (newsUpdate.data.detail ?? {})));
+
+    state.notificationKind = "CalendarV2EventCreated";
+    state.notificationUrl =
+      "/#/calendarv2/whole_week?selectedYear=2026&selectedWeek=37&eventId=9003";
+    const calendar = await collectUpdates({ includeExisting: true }, source);
+    collectionSchema.parse(calendar);
+    const calendarUpdate = calendar.updates.find((update) => update.kind === "notification");
+    assert.ok(calendarUpdate);
+    assert.equal(calendarUpdate.data.detailStatus, "resolved");
+    assert.equal(calendarUpdate.data.detail?.kind, "calendar");
+    assert.equal(calendarUpdate.data.detail?.eventId, 9003);
+    assert.equal(calendarUpdate.data.detail?.text, "Synthetic homework details");
+    assert.ok(!("retrievedAt" in (calendarUpdate.data.detail ?? {})));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

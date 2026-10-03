@@ -30,12 +30,22 @@ import {
   timeRegistrationsResponseSchema,
   addLocalDate,
   type FritidsschemaCommentRequest,
+  type FritidsschemaCommentReadResult,
   type FritidsschemaCommentResult,
   type FritidsschemaRequest,
   type FritidsschemaTimesRequest,
   type FritidsschemaTimesResult,
   type FritidsschemaResult,
 } from "./fritidsschema.js";
+import {
+  buildCalendarEvent,
+  calendarEntriesResponseSchema,
+  calendarEventIdFromNotificationUrl,
+  calendarEventRequestSchema,
+  calendarRangeFromNotification,
+  type CalendarEvent,
+  type CalendarEventRequest,
+} from "./calendar.js";
 import {
   buildNewsItem,
   childIdFromPupilSourceId,
@@ -312,6 +322,78 @@ export class InfoMentorClient {
     }, signal);
   }
 
+  private async readFritidsschemaComments(http: InfoMentorHttp, date: string, signal: AbortSignal) {
+    return http.readAppData(
+      "TimeRegistration/TimeRegistration/GetComments/",
+      { date },
+      commentsResponseSchema,
+      signal,
+    );
+  }
+
+  private async readFritidsschemaCommentContext(
+    http: InfoMentorHttp,
+    input: Pick<FritidsschemaRequest, "childId" | "date">,
+    signal: AbortSignal,
+  ) {
+    const parent = await http.readParent(signal, input.childId);
+
+    if (!parent.apps.some((app) => app.codeName === "timeregistration"))
+      throw new InfoMentorError(
+        "INVALID_CONFIGURATION",
+        "This InfoMentor account does not provide a fritidsschema.",
+      );
+
+    const registrations = await http.readAppData(
+      "TimeRegistration/TimeRegistration/GetTimeRegistrations/",
+      {
+        date: input.date,
+        showNextWeekIfNoMoreSchoolDays: "true",
+      },
+      timeRegistrationsResponseSchema,
+      signal,
+    );
+
+    const day = registrations.days.find((item) => datePart(item.date) === input.date);
+
+    if (!day)
+      throw new InfoMentorError(
+        "INVALID_CONFIGURATION",
+        "No fritidsschema entry was found for the requested date.",
+      );
+
+    const comments = await this.readFritidsschemaComments(http, day.date, signal);
+
+    return { day, comments };
+  }
+
+  getFritidsschemaComment(
+    request: FritidsschemaRequest,
+    signal?: AbortSignal,
+  ): Promise<FritidsschemaCommentReadResult> {
+    const input = fritidsschemaRequestSchema.parse(request);
+
+    return this.read(async (http, activeSignal) => {
+      const { day, comments } = await this.readFritidsschemaCommentContext(
+        http,
+        input,
+        activeSignal,
+      );
+
+      return {
+        childId: input.childId,
+        date: input.date,
+        timeRegistrationId: day.timeRegistrationId,
+        comment: comments.userComment,
+        canEditComment: comments.canEditComment,
+        canEdit: comments.canEdit,
+        timesLockedBySchool: comments.timesLockedBySchool,
+        parentCommentId: comments.parentCommentId,
+        retrievedAt: new Date().toISOString(),
+      };
+    }, signal);
+  }
+
   setFritidsschemaTimes(
     request: FritidsschemaTimesRequest,
     signal?: AbortSignal,
@@ -436,36 +518,9 @@ export class InfoMentorClient {
     const input = fritidsschemaCommentRequestSchema.parse(request);
 
     return this.read(async (http, activeSignal) => {
-      const parent = await http.readParent(activeSignal, input.childId);
-
-      if (!parent.apps.some((app) => app.codeName === "timeregistration"))
-        throw new InfoMentorError(
-          "INVALID_CONFIGURATION",
-          "This InfoMentor account does not provide a fritidsschema.",
-        );
-
-      const registrations = await http.readAppData(
-        "TimeRegistration/TimeRegistration/GetTimeRegistrations/",
-        {
-          date: input.date,
-          showNextWeekIfNoMoreSchoolDays: "true",
-        },
-        timeRegistrationsResponseSchema,
-        activeSignal,
-      );
-
-      const day = registrations.days.find((item) => datePart(item.date) === input.date);
-
-      if (!day)
-        throw new InfoMentorError(
-          "INVALID_CONFIGURATION",
-          "No fritidsschema entry was found for the requested date.",
-        );
-
-      const comments = await http.readAppData(
-        "TimeRegistration/TimeRegistration/GetComments/",
-        { date: day.date },
-        commentsResponseSchema,
+      const { day, comments } = await this.readFritidsschemaCommentContext(
+        http,
+        input,
         activeSignal,
       );
 
@@ -494,12 +549,7 @@ export class InfoMentorClient {
 
       // SaveComment returns a success flag, but reading the record back is the
       // authoritative confirmation that the school system stored the text.
-      const verified = await http.readAppData(
-        "TimeRegistration/TimeRegistration/GetComments/",
-        { date: day.date },
-        commentsResponseSchema,
-        activeSignal,
-      );
+      const verified = await this.readFritidsschemaComments(http, day.date, activeSignal);
 
       if (verified.userComment !== input.comment)
         throw new InfoMentorError(
@@ -577,6 +627,10 @@ export class InfoMentorClient {
             notificationsResponseSchema,
             nextSignal,
           ),
+        resolveNewsItem: (notificationId, nextSignal) =>
+          this.resolveNewsItem(http, notificationId, nextSignal),
+        resolveCalendarEvent: (notificationId, nextSignal) =>
+          this.resolveCalendarEvent(http, notificationId, nextSignal),
       });
     }, collectionSignal);
   }
@@ -685,79 +739,172 @@ export class InfoMentorClient {
     );
   }
 
+  /** Resolve a CalendarV2 notification ID to its full authenticated calendar event. */
+  getCalendarEvent(request: CalendarEventRequest, signal?: AbortSignal): Promise<CalendarEvent> {
+    const { notificationId } = calendarEventRequestSchema.parse(request);
+    return this.read(
+      (http, activeSignal) => this.resolveCalendarEvent(http, notificationId, activeSignal),
+      signal,
+    );
+  }
+
+  private async resolveCalendarEvent(
+    http: InfoMentorHttp,
+    notificationId: number,
+    signal: AbortSignal,
+  ): Promise<CalendarEvent> {
+    const notifications = await http.readAppData(
+      "NotificationApp/NotificationApp/appData",
+      {},
+      notificationsResponseSchema,
+      signal,
+    );
+    const notification = notifications.notifications.find((item) => item.id === notificationId);
+
+    if (!notification)
+      throw new InfoMentorError(
+        "INVALID_CONFIGURATION",
+        "The requested InfoMentor notification is not available in the current feed.",
+      );
+
+    if (
+      notification.appType !== "CalendarV2" &&
+      !notification.type.toLowerCase().startsWith("calendarv2")
+    )
+      throw new InfoMentorError(
+        "INVALID_CONFIGURATION",
+        "The requested InfoMentor notification is not a CalendarV2 event.",
+      );
+
+    const eventId = calendarEventIdFromNotificationUrl(notification.url);
+    if (!eventId)
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        "InfoMentor returned a CalendarV2 notification without a supported event ID.",
+      );
+
+    const currentParent = http.parent;
+    const originalChildId = currentParent?.account.pupils.find((pupil) => pupil.selected)?.id;
+    const targetChildId = childIdFromPupilSourceId(notification.pupilSourceId);
+
+    if (!originalChildId)
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        "InfoMentor did not identify the currently selected child.",
+      );
+
+    if (!targetChildId)
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        "InfoMentor returned a CalendarV2 notification without a supported child ID.",
+      );
+
+    const switchedChild = targetChildId !== originalChildId;
+    if (switchedChild) await http.readParent(signal, targetChildId);
+
+    try {
+      const range = calendarRangeFromNotification(notification.url, notification.dateSent);
+      const feed = await http.readJsonAppData(
+        "calendarv2/calendarv2/getentries",
+        range,
+        calendarEntriesResponseSchema,
+        signal,
+      );
+      const row = feed.items.find((item) => item.id === eventId);
+
+      if (!row)
+        throw new InfoMentorError(
+          "UNEXPECTED_PAGE",
+          "InfoMentor did not return the requested CalendarV2 event in its authenticated calendar feed.",
+        );
+
+      return buildCalendarEvent(notification, row, targetChildId, feed.skipped);
+    } finally {
+      if (switchedChild) await http.readParent(signal, originalChildId);
+    }
+  }
+
   /** Resolve a NewsItem notification ID to its full authenticated news record. */
   getNewsItem(request: NewsItemRequest, signal?: AbortSignal): Promise<NewsItem> {
     const { notificationId } = newsItemRequestSchema.parse(request);
+    return this.read(
+      (http, activeSignal) => this.resolveNewsItem(http, notificationId, activeSignal),
+      signal,
+    );
+  }
 
-    return this.read(async (http, activeSignal) => {
-      const notifications = await http.readAppData(
-        "NotificationApp/NotificationApp/appData",
-        {},
-        notificationsResponseSchema,
-        activeSignal,
+  private async resolveNewsItem(
+    http: InfoMentorHttp,
+    notificationId: number,
+    signal: AbortSignal,
+  ): Promise<NewsItem> {
+    const notifications = await http.readAppData(
+      "NotificationApp/NotificationApp/appData",
+      {},
+      notificationsResponseSchema,
+      signal,
+    );
+    const notification = notifications.notifications.find((item) => item.id === notificationId);
+
+    if (!notification)
+      throw new InfoMentorError(
+        "INVALID_CONFIGURATION",
+        "The requested InfoMentor notification is not available in the current feed.",
       );
-      const notification = notifications.notifications.find((item) => item.id === notificationId);
 
-      if (!notification)
-        throw new InfoMentorError(
-          "INVALID_CONFIGURATION",
-          "The requested InfoMentor notification is not available in the current feed.",
-        );
+    if (notification.type !== "NewsItem")
+      throw new InfoMentorError(
+        "INVALID_CONFIGURATION",
+        "The requested InfoMentor notification is not a NewsItem.",
+      );
 
-      if (notification.type !== "NewsItem")
-        throw new InfoMentorError(
-          "INVALID_CONFIGURATION",
-          "The requested InfoMentor notification is not a NewsItem.",
-        );
+    const newsId = newsIdFromNotificationUrl(notification.url);
 
-      const newsId = newsIdFromNotificationUrl(notification.url);
+    if (!newsId)
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        "InfoMentor returned a NewsItem notification without a supported news ID.",
+      );
 
-      if (!newsId)
+    const currentParent = http.parent;
+    const originalChildId = currentParent?.account.pupils.find((pupil) => pupil.selected)?.id;
+    const targetChildId = childIdFromPupilSourceId(notification.pupilSourceId);
+
+    if (!originalChildId)
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        "InfoMentor did not identify the currently selected child.",
+      );
+
+    if (!targetChildId)
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        "InfoMentor returned a NewsItem notification without a supported child ID.",
+      );
+
+    const switchedChild = targetChildId !== originalChildId;
+
+    if (switchedChild) await http.readParent(signal, targetChildId);
+
+    try {
+      const feed = await http.readJsonAppData(
+        "Communication/News/GetNewsList",
+        { pageSize: -1, sortBy: "lastPublishDate___SORT_DESC" },
+        newsListResponseSchema,
+        signal,
+      );
+      const row = feed.items.find((item) => item.id === newsId);
+
+      if (!row)
         throw new InfoMentorError(
           "UNEXPECTED_PAGE",
-          "InfoMentor returned a NewsItem notification without a supported news ID.",
+          "InfoMentor did not return the requested NewsItem in its authenticated news feed.",
         );
 
-      const currentParent = http.parent;
-      const originalChildId = currentParent?.account.pupils.find((pupil) => pupil.selected)?.id;
-      const targetChildId = childIdFromPupilSourceId(notification.pupilSourceId);
-
-      if (!originalChildId)
-        throw new InfoMentorError(
-          "UNEXPECTED_PAGE",
-          "InfoMentor did not identify the currently selected child.",
-        );
-
-      if (!targetChildId)
-        throw new InfoMentorError(
-          "UNEXPECTED_PAGE",
-          "InfoMentor returned a NewsItem notification without a supported child ID.",
-        );
-
-      const switchedChild = targetChildId !== originalChildId;
-
-      if (switchedChild) await http.readParent(activeSignal, targetChildId);
-
-      try {
-        const feed = await http.readJsonAppData(
-          "Communication/News/GetNewsList",
-          { pageSize: -1, sortBy: "lastPublishDate___SORT_DESC" },
-          newsListResponseSchema,
-          activeSignal,
-        );
-        const row = feed.items.find((item) => item.id === newsId);
-
-        if (!row)
-          throw new InfoMentorError(
-            "UNEXPECTED_PAGE",
-            "InfoMentor did not return the requested NewsItem in its authenticated news feed.",
-          );
-
-        return buildNewsItem(notification, row, feed.skipped);
-      } finally {
-        if (switchedChild) await http.readParent(activeSignal, originalChildId);
-      }
-    }, signal);
+      return buildNewsItem(notification, row, feed.skipped);
+    } finally {
+      if (switchedChild) await http.readParent(signal, originalChildId);
+    }
   }
 
   getNotifications(

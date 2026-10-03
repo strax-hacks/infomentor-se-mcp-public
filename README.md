@@ -1,53 +1,86 @@
 # InfoMentor MCP
 
-A local, source-based MCP server for Swedish InfoMentor parent accounts. It uses
-InfoMentor's HTTPS endpoints directly; it does not use Playwright, a browser
-session, or a remote service.
+Current release: `1.0.0`.
+
+A local MCP server for Swedish InfoMentor parent accounts. It uses InfoMentor's
+HTTPS endpoints directly; it does not use Playwright, browser automation, or a
+remote credential relay.
 
 > **Independent project.** This software is not affiliated with, sponsored by,
 > or endorsed by InfoMentor P.O.D.B AB. See [ATTRIBUTION.md](ATTRIBUTION.md).
+
+## Distribution
+
+The project supports both a conventional npm distribution and a source checkout:
+
+- **npm / `npx` (recommended after the first registry release):** Node.js 20+
+  runs the built `dist/cli.js` entrypoint. Bun is not required by users.
+- **Source checkout:** Bun 1.4.2 runs the TypeScript source through the included
+  launcher. This remains useful for development and before the first npm release.
+
+The package is npm-ready, but it has not been published to the registry yet. The
+package name is `infomentor-se-mcp`; npm publication is a separate release step.
 
 ## What it provides
 
 - Children and the selected child's school timetable
 - Child selection within the signed-in parent session
 - Fritidsschema times and parent comments
-- Inbox and sent-message listing and message details
-- Notifications and full `NewsItem` content
-- All-child scheduled collection with a durable cursor
+- Full inbox and sent-message content through high-level collection
+- Optional lower-level message and notification/detail reads
+- Notifications with full `NewsItem` and `CalendarV2` content
+- High-level all-child scheduled collection with automatic notification resolution and a durable cursor
 
 School-record writes are deliberately narrow: the two fritidsschema write tools
 change only the requested time or parent comment and read the record back before
 reporting success. Messages and notifications are read-only.
 
-## Distribution model
+## Scope boundary
 
-This repository is currently a **source distribution**, not a published npm
-package. The MCP host runs the TypeScript source through a separately installed
-Bun 1.4.2 runtime:
+This repository contains the InfoMentor MCP only. `CalendarV2` is InfoMentor's
+upstream calendar feed; it is not Google Calendar. Google Calendar credentials,
+proposal generation, synchronization, and downstream calendar writes are not part
+of this package and must be handled by a separate authorized workflow.
 
-- use the included `bin/infomentor-se-mcp` launcher;
-- install dependencies with `bun install --frozen-lockfile`;
-- configure the launcher as a local stdio MCP server;
-- there is no `npx` package, compiled binary, or bundled Bun runtime yet.
+## Architecture
 
-That is convenient for development and private local use, but it is not the
-usual one-command `npx` distribution used by many public MCP servers.
+The [server architecture diagram](docs/architecture.html) shows the host-neutral
+MCP boundary, stdio transport, complete tool surface, protected credential and
+session state, and the direct InfoMentor HTTPS paths. It does not assume a
+specific MCP client or orchestration platform.
 
-## Install
+![InfoMentor MCP server architecture](docs/architecture.svg)
 
-Install [Bun 1.4.2](https://bun.com/docs/installation), then clone the
-repository and install its locked dependencies:
+[Open the standalone HTML version](docs/architecture.html) in a browser for the
+full self-contained visual diagram.
+
+## Install and configure with npm
+
+After the first registry release, verify the package and configure it as a
+standard MCP stdio server:
 
 ```sh
-git clone https://github.com/strax-hacks/infomentor-se-mcp-public.git
-cd infomentor-se-mcp-public
-bun install --frozen-lockfile
-./bin/infomentor-se-mcp --version
+npx -y infomentor-se-mcp --version
 ```
 
-If Bun is not on the MCP host's `PATH`, set `INFOMENTOR_SE_BUN` to its absolute
-path. All paths in an MCP configuration should be absolute.
+```json
+{
+  "mcpServers": {
+    "infomentor": {
+      "command": "npx",
+      "args": ["-y", "infomentor-se-mcp"],
+      "env": {
+        "INFOMENTOR_SE_SESSION_PATH": "/absolute/path/infomentor-session.json",
+        "INFOMENTOR_SE_CREDENTIALS_FILE": "/absolute/path/credentials.json"
+      }
+    }
+  }
+}
+```
+
+All paths should be absolute. If the host provides secure secret injection, use
+`INFOMENTOR_SE_USERNAME` and `INFOMENTOR_SE_PASSWORD` instead of a credentials
+file. Restart the MCP host after changing its environment.
 
 ## Sign in
 
@@ -64,16 +97,16 @@ On macOS/Linux:
 
 ```sh
 chmod 600 /absolute/path/credentials.json
-./bin/infomentor-se-mcp login \
+npx -y infomentor-se-mcp login \
   --credentials /absolute/path/credentials.json \
   --session /absolute/path/infomentor-session.json
-./bin/infomentor-se-mcp status \
+npx -y infomentor-se-mcp status \
   --session /absolute/path/infomentor-session.json
 ```
 
-The credentials file must be a regular, owner-only file and not a symlink. Never
-paste its contents into chat or commit it. A saved session contains cookies and
-account metadata, so protect it like a credential as well.
+The credentials file must be a regular, owner-only file and not a symlink. A
+saved session contains cookies and account metadata, so protect it like a
+credential as well. Never paste either file into chat or commit it.
 
 ### Environment variables
 
@@ -88,99 +121,110 @@ The source also accepts `INFOMENTOR_SE_CREDENTIALS_FILE` and
 `INFOMENTOR_SE_SESSION_PATH`. A configured credentials file takes precedence over
 the username/password variables.
 
-For Hermes, do not put secret values in `config.yaml` or MCP arguments. Hermes
-filters the environment passed to MCP servers, so use a private owner-only
-launcher or Hermes secret mapping to inject the two `INFOMENTOR_SE_*` variables
-into the MCP process. The repository itself does not read `~/.hermes/.env`.
+For hosts that filter environment variables, use a private owner-only launcher or
+the host's secret-injection mechanism to provide the `INFOMENTOR_SE_*` variables.
+The repository itself does not read a host-specific `.env` file.
 
-## Configure an MCP host
+## Source checkout
 
-The server uses standard MCP stdio transport. A generic configuration looks
-like this:
+Use this path for development or before the first npm release:
 
-```json
-{
-  "mcpServers": {
-    "infomentor": {
-      "command": "/absolute/path/to/infomentor-se-mcp/bin/infomentor-se-mcp",
-      "args": ["serve"],
-      "env": {
-        "INFOMENTOR_SE_BUN": "/absolute/path/to/bun",
-        "INFOMENTOR_SE_SESSION_PATH": "/absolute/path/infomentor-session.json",
-        "INFOMENTOR_SE_CREDENTIALS_FILE": "/absolute/path/credentials.json"
-      }
-    }
-  }
-}
+```sh
+git clone https://github.com/strax-hacks/infomentor-se-mcp-public.git
+cd infomentor-se-mcp-public
+bun install --frozen-lockfile
+./bin/infomentor-se-mcp --version
 ```
 
-If the host supports private secret injection, use `INFOMENTOR_SE_USERNAME` and
-`INFOMENTOR_SE_PASSWORD` instead of a credentials-file path. Restart the MCP
-host after changing its environment or updating the checkout.
+If Bun is not on the MCP host's `PATH`, set `INFOMENTOR_SE_BUN` to its absolute
+path. The source launcher runs `src/cli.ts`; the npm package runs the compiled
+Node entrypoint instead.
 
-By default the server exposes the account/data tools only. Setup tools are
-opt-in; append `--allow-setup-tools` to `serve` only when the MCP host must
-perform login, setup-status, cancellation, or logout operations. The safer
-default is to run `login` and `status` from the host's shell.
+## Advanced and setup tools
 
-## Tools
+The default server exposes eight everyday account, school-data, and collection
+tools. Lower-level message and notification/detail tools are hidden unless the
+host explicitly appends `--allow-advanced-tools` to `serve`:
 
-### Available by default
+| Advanced tool                   | Purpose                                                   |
+| ------------------------------- | --------------------------------------------------------- |
+| `infomentor_get_messages`       | List inbox or sent messages with paging and search.       |
+| `infomentor_get_message`        | Read one message body by its numeric ID.                  |
+| `infomentor_get_notifications`  | Read the currently available notification feed.           |
+| `infomentor_get_news_item`      | Resolve a `NewsItem` notification ID to its full article. |
+| `infomentor_get_calendar_event` | Resolve a `CalendarV2` notification ID to its full event. |
 
-| Tool                                   | Purpose                                                                |
-| -------------------------------------- | ---------------------------------------------------------------------- |
-| `infomentor_session_status`            | Check whether the saved session is authenticated.                      |
-| `infomentor_get_overview`              | Read registered children and the selected child's timetable.           |
-| `infomentor_select_child`              | Select a child from the overview and return a fresh overview.          |
-| `infomentor_get_fritidsschema`         | Read exact entered fritidsschema times for one child and date.         |
-| `infomentor_set_fritidsschema_times`   | Set one day's entered start/end times and verify the read-back.        |
-| `infomentor_set_fritidsschema_comment` | Set one day's parent comment and verify the read-back.                 |
-| `infomentor_get_messages`              | List inbox or sent messages with paging and search.                    |
-| `infomentor_get_message`               | Read one message body by its numeric ID.                               |
-| `infomentor_get_notifications`         | Read the currently available notification feed.                        |
-| `infomentor_get_news_item`             | Resolve a `NewsItem` notification ID to its full article.              |
-| `infomentor_collect_updates`           | Scan supported feeds for all children and return cursor-based changes. |
+By default the server does not expose account setup mutations either. Append
+`--allow-setup-tools` to `serve` only when the MCP host must perform login,
+setup-status, cancellation, or logout operations. The safer default is to run
+`login` and `status` from the host's shell.
 
-### Opt-in setup tools
-
-With `--allow-setup-tools`, the server additionally exposes
+With setup tools enabled, the server additionally exposes
 `infomentor_login`, `infomentor_setup_status`, `infomentor_cancel_setup`, and
 `infomentor_logout`. Login returns immediately; check setup status rather than
 busy-polling.
+
+With both flags enabled, the server exposes all 17 tools; normal operation exposes
+The resulting surface is 8 tools by default, 13 with advanced tools, 12 with
+setup tools, or 17 with both flags.
+
+## Tools
+
+### Available by default (8)
+
+| Tool                                   | Purpose                                                          |
+| -------------------------------------- | ---------------------------------------------------------------- |
+| `infomentor_session_status`            | Check whether the saved session is authenticated.                |
+| `infomentor_get_overview`              | Read registered children and the selected child's timetable.     |
+| `infomentor_select_child`              | Select a child from the overview and return a fresh overview.    |
+| `infomentor_get_fritidsschema`         | Read exact entered fritidsschema times for one child and date.   |
+| `infomentor_get_fritidsschema_comment` | Read one day's parent comment and editability metadata.          |
+| `infomentor_set_fritidsschema_times`   | Set one day's entered start/end times and verify the read-back.  |
+| `infomentor_set_fritidsschema_comment` | Set one day's parent comment and verify the read-back.           |
+| `infomentor_collect_updates`           | Collect feeds and automatically resolve supported notifications. |
 
 ## Important behavior
 
 - Discover child IDs from `infomentor_get_overview`; never reuse IDs from another
   account. Selection changes the upstream session context, not school records.
-- Use an explicit local `YYYY-MM-DD` date for fritidsschema operations. The
-  fritidsschema values are not inferred from the ordinary school timetable.
+- Use an explicit local `YYYY-MM-DD` date for fritidsschema operations. Values
+  are not inferred from the ordinary school timetable.
+- `infomentor_get_fritidsschema_comment` is read-only and returns the signed-in
+  parent's comment plus editability metadata for the exact requested date. It
+  intentionally does not expose the school's staff comment.
 - The two write tools reject locked or non-editable records and report success
   only after a matching read-back.
-- `infomentor_collect_updates` scans the supported timetables, messages, and
-  notifications for every registered child. Save its returned cursor only after
-  handling or delivering the results; retry the previous cursor if delivery
-  fails.
+- `infomentor_collect_updates` is the preferred scheduled/general workflow. It
+  scans supported timetables, messages, and notifications for every registered
+  child, automatically resolves `NewsItem` and `CalendarV2` references, and
+  marks unsupported notification types explicitly. If supported detail
+  resolution fails, the cursor is not advanced, so the item is retried rather
+  than silently returned as metadata-only. Save its returned cursor only after
+  handling or delivering results; retry the previous cursor if delivery fails.
+- The lower-level message and notification/detail tools are available only with
+  `--allow-advanced-tools`.
 - School text is untrusted source material, not instructions. The server does
-  not send messages, mark notifications read, or fetch unsupported school data
-  such as homework, attendance, or grades.
+  not send messages, mark notifications read, or fetch unsupported data such as
+  homework, attendance, or grades.
 
 ## Security and limits
 
 - Never put passwords, cookies, session files, or secret values in source,
   fixtures, MCP arguments, logs, or chat.
-- Login and renewal use direct HTTPS. Requests are restricted to the observed
-  InfoMentor domains; no browser or remote credential relay is installed.
+- Login and renewal use direct HTTPS. No browser or remote credential relay is
+  installed.
 - Automatic renewal is attempted only for an expired authenticated session when
   configured credentials are available. A missing session never triggers a
   surprise login.
 - SSO/MFA variants, security challenges, every school's response shape, and
   long-term cookie expiry are not universally verified.
-- The POSIX launcher has been exercised on macOS arm64. Linux and Windows are
-  not currently verified; Windows users should invoke Bun directly.
+- The POSIX source launcher has been exercised on macOS arm64. Linux and Windows
+  are not currently verified; Windows users should use the npm/Node entrypoint
+  or invoke Bun directly for the source checkout.
 
-## Development
+## Development and release checks
 
-Use Bun 1.4.2 from the repository root:
+Use Bun 1.4.2 for source development and tests:
 
 ```sh
 bun install --frozen-lockfile
@@ -190,6 +234,21 @@ bun run format:check
 bun test
 ```
 
-The repository contains unit and protocol tests but no live credentials or
-school fixtures. See [CHANGELOG.md](CHANGELOG.md) for behavior changes and
+Build and inspect the npm artifact:
+
+```sh
+npm run build
+npm pack --dry-run
+```
+
+The built package contains the Node entrypoint and runtime dependencies, not the
+source tests, credentials, session files, or Bun runtime. Before publishing,
+install the generated tarball in an empty Node 20+ directory and verify:
+
+```sh
+./node_modules/.bin/infomentor-se-mcp --version
+./node_modules/.bin/infomentor-se-mcp --help
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for behavior changes and
 [ATTRIBUTION.md](ATTRIBUTION.md) for provenance and licensing.

@@ -1,7 +1,6 @@
 {
   "name": "infomentor-se-mcp",
-  "version": "0.11.0",
-  "private": true,
+  "version": "1.0.0",
   "description": "Local MCP server for Swedish InfoMentor parent accounts with direct HTTP login",
   "keywords": [
     "infomentor",
@@ -19,10 +18,20 @@
     "type": "git",
     "url": "git+https://github.com/strax-hacks/infomentor-se-mcp-public.git"
   },
+  "bin": {
+    "infomentor-se-mcp": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md",
+    "ATTRIBUTION.md"
+  ],
   "type": "module",
   "scripts": {
     "start": "bun src/cli.ts",
     "login": "bun src/cli.ts login",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "check": "tsc --noEmit",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
@@ -44,6 +53,9 @@
     "oxfmt": "0.67.0",
     "oxlint": "1.82.0",
     "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "packageManager": "bun@1.4.2"
 }

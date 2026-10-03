@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -25,6 +25,8 @@ const help = [
   "  --timeout SECONDS  login: maximum wait (default: 300)",
   "  --allow-account-change",
   "                     login: replace a saved session that belongs to another account",
+  "  --allow-advanced-tools",
+  "                     serve: also register lower-level message and notification/detail tools",
   "  --allow-setup-tools",
   "                     serve: also register the login, setup-status, cancel, and logout tools",
   "  -h, --help         Show help",
@@ -54,6 +56,7 @@ async function main(): Promise<void> {
         import: { type: "string" },
         timeout: { type: "string" },
         "allow-account-change": { type: "boolean" },
+        "allow-advanced-tools": { type: "boolean" },
         "allow-setup-tools": { type: "boolean" },
         help: { type: "boolean", short: "h" },
         version: { type: "boolean", short: "v" },
@@ -99,7 +102,7 @@ async function main(): Promise<void> {
     throw new InfoMentorError("INVALID_CONFIGURATION", "Login options only apply to login.");
   }
 
-  if (command !== "serve" && values["allow-setup-tools"])
+  if (command !== "serve" && (values["allow-advanced-tools"] || values["allow-setup-tools"]))
     throw new InfoMentorError("INVALID_CONFIGURATION", "Server options only apply to serve.");
 
   if (values.import && values.credentials)
@@ -110,6 +113,8 @@ async function main(): Promise<void> {
   if (values.session) options.sessionFile = resolve(values.session);
 
   if (values.credentials) options.credentialsFile = resolve(values.credentials);
+
+  if (values["allow-advanced-tools"]) options.allowAdvancedTools = true;
 
   if (values["allow-setup-tools"]) options.allowSetupTools = true;
 

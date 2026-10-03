@@ -80,6 +80,25 @@ test("public fritidsschema client read selects the child and returns entered tim
         days: [schedule, { malformed: true }],
       });
 
+    if (url.pathname === "/TimeRegistration/TimeRegistration/GetComments/" && method === "POST")
+      return Response.json({
+        date: schedule.date,
+        teacherComment: "Personalens kommentar",
+        teacherName: "Personal",
+        teacherCommentDate: "2025-01-23T06:33:14",
+        userComment: "Barnet går hem efter skolan",
+        userName: "Parent",
+        userCommentDate: "2025-01-23T13:56:56",
+        checkedIn: "08:00",
+        checkedOut: "17:15",
+        canEdit: true,
+        timesLockedBySchool: false,
+        parentCommentId: 8001001,
+        checkInUserDisplayName: "Personal",
+        checkOutUserDisplayName: "Personal",
+        canEditComment: true,
+      });
+
     return new Response("unexpected", { status: 404 });
   };
 
@@ -108,6 +127,23 @@ test("public fritidsschema client read selects the child and returns entered tim
           skipped: 1,
         },
       );
+
+      const comment = await client.getFritidsschemaComment({
+        childId: "child-2",
+        date: "2025-01-24",
+      });
+
+      assert.deepEqual(comment, {
+        childId: "child-2",
+        date: "2025-01-24",
+        timeRegistrationId: 7001001,
+        comment: "Barnet går hem efter skolan",
+        canEditComment: true,
+        canEdit: true,
+        timesLockedBySchool: false,
+        parentCommentId: 8001001,
+        retrievedAt: comment.retrievedAt,
+      });
     } finally {
       await client.close();
     }

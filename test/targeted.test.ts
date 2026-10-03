@@ -110,6 +110,7 @@ globalThis.fetch = () => process.exit(92);
     const output = await new Response(help.stdout).text();
     assert.doesNotMatch(output, /local-form/);
     assert.match(output, /--credentials/);
+    assert.match(output, /--allow-advanced-tools/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -189,6 +189,21 @@ export const fritidsschemaCommentRequestSchema = z
 
 export type FritidsschemaCommentRequest = z.input<typeof fritidsschemaCommentRequestSchema>;
 
+/** Public read result for the signed-in parent's fritidsschema comment. */
+export const fritidsschemaCommentReadResultSchema = z.object({
+  childId: z.string(),
+  date: fritidsschemaDateSchema,
+  timeRegistrationId: z.number().int().positive(),
+  comment: z.string().nullable(),
+  canEditComment: z.boolean(),
+  canEdit: z.boolean(),
+  timesLockedBySchool: z.boolean(),
+  parentCommentId: z.number().int().positive().nullable(),
+  retrievedAt: z.iso.datetime(),
+});
+
+export type FritidsschemaCommentReadResult = z.infer<typeof fritidsschemaCommentReadResultSchema>;
+
 export const fritidsschemaCommentResultSchema = z.object({
   childId: z.string(),
   date: fritidsschemaDateSchema,
