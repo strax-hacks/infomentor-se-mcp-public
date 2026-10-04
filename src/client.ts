@@ -43,17 +43,24 @@ import {
   calendarEventIdFromNotificationUrl,
   calendarEventRequestSchema,
   calendarRangeFromNotification,
+  type CalendarEntriesResponse,
   type CalendarEvent,
   type CalendarEventRequest,
 } from "./calendar.js";
 import {
+  buildNewsContent,
   buildNewsItem,
   childIdFromPupilSourceId,
   newsIdFromNotificationUrl,
   newsItemRequestSchema,
   newsListResponseSchema,
+  newsSearchRequestSchema,
+  newsSearchSchema,
   type NewsItem,
   type NewsItemRequest,
+  type NewsListResponse,
+  type NewsSearch,
+  type NewsSearchRequest,
 } from "./news.js";
 import type { InfoMentorHttp } from "./http.js";
 import {
@@ -105,6 +112,15 @@ export const setupStatusSchema = z.object({
 
 export type SetupStatus = z.infer<typeof setupStatusSchema>;
 
+type Notification = Notifications["notifications"][number];
+
+type NotificationFeed = { notifications: Notification[]; skipped: number };
+
+type ResolverCaches = {
+  newsFeeds: Map<string, Promise<NewsListResponse>>;
+  calendarFeeds: Map<string, Promise<CalendarEntriesResponse>>;
+};
+
 function comparableSession(session: SavedSession): string {
   return JSON.stringify({
     accountId: session.accountId,
@@ -112,6 +128,41 @@ function comparableSession(session: SavedSession): string {
     rateLimitedUntil: session.rateLimitedUntil,
     cookies: session.cookies.map(({ lastAccessed: _lastAccessed, ...cookie }) => cookie),
   });
+}
+
+const swedishMonths = new Map([
+  ["januari", 1],
+  ["februari", 2],
+  ["mars", 3],
+  ["april", 4],
+  ["maj", 5],
+  ["juni", 6],
+  ["juli", 7],
+  ["augusti", 8],
+  ["september", 9],
+  ["oktober", 10],
+  ["november", 11],
+  ["december", 12],
+]);
+
+function newsDatePart(value: string | null): string | undefined {
+  if (!value) return undefined;
+  const iso = /^(\d{4}-\d{2}-\d{2})/.exec(value)?.[1];
+  if (iso) return iso;
+
+  const swedish = /^(\d{1,2})\s+([A-Za-zåäöÅÄÖ]+)\s+(\d{4})$/u.exec(value.trim());
+  if (!swedish) return undefined;
+  const monthName = swedish[2];
+  const year = swedish[3];
+  const day = swedish[1];
+  if (!monthName || !year || !day) return undefined;
+  const month = swedishMonths.get(monthName.toLocaleLowerCase("sv-SE"));
+  if (!month) return undefined;
+  return `${year}-${String(month).padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
+
+function newsRowDate(row: NewsListResponse["items"][number]): string | undefined {
+  return newsDatePart(row.publishedDate) ?? newsDatePart(row.publishedDateString);
 }
 
 /** Reuses cookies and serializes account requests for one MCP connection. */
@@ -574,6 +625,11 @@ export class InfoMentorClient {
 
     return this.read((http, activeSignal) => {
       let cachedParent = http.parent;
+      const notificationFeeds = new Map<string, NotificationFeed>();
+      const resolverCaches: ResolverCaches = {
+        newsFeeds: new Map(),
+        calendarFeeds: new Map(),
+      };
 
       const getParent = (nextSignal: AbortSignal) => {
         if (cachedParent) {
@@ -620,17 +676,25 @@ export class InfoMentorClient {
             messageDetailSchema,
             nextSignal,
           ),
-        getNotifications: (nextSignal) =>
-          http.readAppData(
+        getNotifications: async (nextSignal) => {
+          const selectedChildId =
+            http.parent?.account.pupils.find((pupil) => pupil.selected)?.id ?? "";
+          const cached = notificationFeeds.get(selectedChildId);
+          if (cached) return cached;
+
+          const feed = await http.readAppData(
             "NotificationApp/NotificationApp/appData",
             {},
             notificationsResponseSchema,
             nextSignal,
-          ),
-        resolveNewsItem: (notificationId, nextSignal) =>
-          this.resolveNewsItem(http, notificationId, nextSignal),
-        resolveCalendarEvent: (notificationId, nextSignal) =>
-          this.resolveCalendarEvent(http, notificationId, nextSignal),
+          );
+          notificationFeeds.set(selectedChildId, feed);
+          return feed;
+        },
+        resolveNewsItem: (notificationId, nextSignal, notification) =>
+          this.resolveNewsItem(http, notificationId, nextSignal, notification, resolverCaches),
+        resolveCalendarEvent: (notificationId, nextSignal, notification) =>
+          this.resolveCalendarEvent(http, notificationId, nextSignal, notification, resolverCaches),
       });
     }, collectionSignal);
   }
@@ -739,6 +803,48 @@ export class InfoMentorClient {
     );
   }
 
+  searchNews(request: NewsSearchRequest, signal?: AbortSignal): Promise<NewsSearch> {
+    const input = newsSearchRequestSchema.parse(request);
+
+    return this.read(async (http, activeSignal) => {
+      const originalParent = http.parent ?? (await http.readParent(activeSignal));
+      const originalChildId = originalParent.account.pupils.find((pupil) => pupil.selected)?.id;
+
+      if (!originalChildId)
+        throw new InfoMentorError(
+          "UNEXPECTED_PAGE",
+          "InfoMentor did not identify the currently selected child.",
+        );
+
+      const switchedChild = input.childId !== originalChildId;
+      if (switchedChild) await http.readParent(activeSignal, input.childId);
+
+      try {
+        const feed = await http.readJsonAppData(
+          "Communication/News/GetNewsList",
+          { pageSize: -1, sortBy: "lastPublishDate___SORT_DESC" },
+          newsListResponseSchema,
+          activeSignal,
+        );
+        const rows = feed.items.filter((row) => {
+          const date = newsRowDate(row);
+          return date !== undefined && date >= input.fromDate && date <= input.toDate;
+        });
+
+        return newsSearchSchema.parse({
+          childId: input.childId,
+          fromDate: input.fromDate,
+          toDate: input.toDate,
+          items: rows.map((row) => buildNewsContent(row, feed.skipped)),
+          skipped: feed.skipped,
+          retrievedAt: new Date().toISOString(),
+        });
+      } finally {
+        if (switchedChild) await http.readParent(activeSignal, originalChildId);
+      }
+    }, signal);
+  }
+
   /** Resolve a CalendarV2 notification ID to its full authenticated calendar event. */
   getCalendarEvent(request: CalendarEventRequest, signal?: AbortSignal): Promise<CalendarEvent> {
     const { notificationId } = calendarEventRequestSchema.parse(request);
@@ -752,14 +858,20 @@ export class InfoMentorClient {
     http: InfoMentorHttp,
     notificationId: number,
     signal: AbortSignal,
+    suppliedNotification?: Notification,
+    resolverCaches?: ResolverCaches,
   ): Promise<CalendarEvent> {
-    const notifications = await http.readAppData(
-      "NotificationApp/NotificationApp/appData",
-      {},
-      notificationsResponseSchema,
-      signal,
-    );
-    const notification = notifications.notifications.find((item) => item.id === notificationId);
+    let notification = suppliedNotification;
+
+    if (!notification) {
+      const notifications = await http.readAppData(
+        "NotificationApp/NotificationApp/appData",
+        {},
+        notificationsResponseSchema,
+        signal,
+      );
+      notification = notifications.notifications.find((item) => item.id === notificationId);
+    }
 
     if (!notification)
       throw new InfoMentorError(
@@ -804,12 +916,18 @@ export class InfoMentorClient {
 
     try {
       const range = calendarRangeFromNotification(notification.url, notification.dateSent);
-      const feed = await http.readJsonAppData(
-        "calendarv2/calendarv2/getentries",
-        range,
-        calendarEntriesResponseSchema,
-        signal,
-      );
+      const feedKey = JSON.stringify([targetChildId, range]);
+      let feedPromise = resolverCaches?.calendarFeeds.get(feedKey);
+      if (!feedPromise) {
+        feedPromise = http.readJsonAppData(
+          "calendarv2/calendarv2/getentries",
+          range,
+          calendarEntriesResponseSchema,
+          signal,
+        );
+        resolverCaches?.calendarFeeds.set(feedKey, feedPromise);
+      }
+      const feed = await feedPromise;
       const row = feed.items.find((item) => item.id === eventId);
 
       if (!row)
@@ -837,14 +955,20 @@ export class InfoMentorClient {
     http: InfoMentorHttp,
     notificationId: number,
     signal: AbortSignal,
+    suppliedNotification?: Notification,
+    resolverCaches?: ResolverCaches,
   ): Promise<NewsItem> {
-    const notifications = await http.readAppData(
-      "NotificationApp/NotificationApp/appData",
-      {},
-      notificationsResponseSchema,
-      signal,
-    );
-    const notification = notifications.notifications.find((item) => item.id === notificationId);
+    let notification = suppliedNotification;
+
+    if (!notification) {
+      const notifications = await http.readAppData(
+        "NotificationApp/NotificationApp/appData",
+        {},
+        notificationsResponseSchema,
+        signal,
+      );
+      notification = notifications.notifications.find((item) => item.id === notificationId);
+    }
 
     if (!notification)
       throw new InfoMentorError(
@@ -887,12 +1011,18 @@ export class InfoMentorClient {
     if (switchedChild) await http.readParent(signal, targetChildId);
 
     try {
-      const feed = await http.readJsonAppData(
-        "Communication/News/GetNewsList",
-        { pageSize: -1, sortBy: "lastPublishDate___SORT_DESC" },
-        newsListResponseSchema,
-        signal,
-      );
+      const feedKey = targetChildId;
+      let feedPromise = resolverCaches?.newsFeeds.get(feedKey);
+      if (!feedPromise) {
+        feedPromise = http.readJsonAppData(
+          "Communication/News/GetNewsList",
+          { pageSize: -1, sortBy: "lastPublishDate___SORT_DESC" },
+          newsListResponseSchema,
+          signal,
+        );
+        resolverCaches?.newsFeeds.set(feedKey, feedPromise);
+      }
+      const feed = await feedPromise;
       const row = feed.items.find((item) => item.id === newsId);
 
       if (!row)

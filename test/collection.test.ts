@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, stat, utimes } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "bun:test";
@@ -8,13 +8,13 @@ import { type CalendarEvent } from "../src/calendar.js";
 import { type NewsItem } from "../src/news.js";
 import { InfoMentorError, throwIfAborted, type Notifications } from "../src/session.js";
 
-const summary = (id: number) => ({
+const summary = (id: number, version = 0) => ({
   id,
   messageContextType: "General",
   sentUser: { id: 2, displayName: "Synthetic teacher" },
   isNew: true,
   messageSubject: "Synthetic subject",
-  timeSent: "2026-09-11T08:00:00",
+  timeSent: id === 11 && version ? `2026-09-11T08:00:0${version}` : "2026-09-11T08:00:00",
 });
 
 function sourceFor(sessionFile: string) {
@@ -32,6 +32,7 @@ function sourceFor(sessionFile: string) {
     duplicateNoticeId: false,
     renameDuringScan: false,
     detailReads: 0,
+    messageVersion: 0,
     notificationKind: "MessageCreated" as "MessageCreated" | "NewsItem" | "CalendarV2EventCreated",
     notificationUrl: "/#/message/show/11",
     skipped: { timetable: 0, messages: 0, notifications: 0 },
@@ -103,7 +104,7 @@ function sourceFor(sessionFile: string) {
         state.selected === "first" && folder === "inbox" && page === 1 ? state.skipped.messages : 0;
 
       return {
-        items: state.removed && id === 12 ? [] : skipped ? [] : [summary(id)],
+        items: state.removed && id === 12 ? [] : skipped ? [] : [summary(id, state.messageVersion)],
         more: folder === "inbox" && page === 1,
         skipped,
       };
@@ -113,7 +114,7 @@ function sourceFor(sessionFile: string) {
       state.detailReads++;
 
       return {
-        ...summary(id),
+        ...summary(id, state.messageVersion),
         messageBodyPlainText: id === 11 ? state.body : "Other private body",
         toUsers: [{ id: 3, displayName: "Synthetic guardian" }],
         messageFolder: id === 21 ? "Sent" : "Inbox",
@@ -279,7 +280,7 @@ test("collection snapshots replay deltas, preserve context, and fail without adv
         assert.equal(unchanged.cursor, baseline.cursor);
         assert.equal(unchanged.baseline, false);
         assert.deepEqual(unchanged.updates, []);
-        assert.equal(state.detailReads, 12);
+        assert.equal(state.detailReads, 6);
 
         const existing = await collectUpdates({ includeExisting: true }, source);
         assert.equal(existing.updates.length, 7);
@@ -302,7 +303,8 @@ test("collection snapshots replay deltas, preserve context, and fail without adv
         assert.deepEqual(duplicate.childIds, ["first", "second"]);
         state.duplicateNoticeId = false;
 
-        state.body = "Changed body with an unchanged summary";
+        state.body = "Changed body with a changed summary";
+        state.messageVersion = 1;
         const delta = await collectUpdates({ cursor: baseline.cursor }, source);
         assert.notEqual(delta.cursor, baseline.cursor);
         assert.equal(delta.updates.length, 1);
@@ -501,6 +503,36 @@ test("partial feeds preserve their baselines through unchanged recovery", async 
     assert.deepEqual(repeated.missing, []);
     assert.deepEqual(repeated.updates, []);
     assert.equal(repeated.cursor, baseline.cursor);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy snapshots upgrade summary fingerprints without replaying unchanged items", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "infomentor-collection-legacy-"));
+
+  try {
+    const sessionFile = join(directory, "session.json");
+    const { source, state } = sourceFor(sessionFile);
+    const baseline = await collectUpdates({}, source);
+    const snapshotPath = join(sessionFile + ".collections", baseline.cursor + ".json");
+    const legacy = JSON.parse(await readFile(snapshotPath, "utf8")) as {
+      fingerprints: Array<Record<string, unknown>>;
+    };
+
+    for (const fingerprint of legacy.fingerprints) delete fingerprint.summaryHash;
+    await writeFile(snapshotPath, JSON.stringify(legacy));
+
+    const upgraded = await collectUpdates({ cursor: baseline.cursor }, source);
+
+    assert.deepEqual(upgraded.updates, []);
+    assert.equal(upgraded.cursor, baseline.cursor);
+    assert.equal(state.detailReads, 12);
+
+    const saved = JSON.parse(await readFile(snapshotPath, "utf8")) as {
+      fingerprints: Array<Record<string, unknown>>;
+    };
+    assert.ok(saved.fingerprints.some((fingerprint) => fingerprint.summaryHash));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

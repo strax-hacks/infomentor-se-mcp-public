@@ -2,7 +2,7 @@
           <title id="diagram-title">InfoMentor MCP server architecture</title>
           <desc id="diagram-desc">
             A generic MCP host connects over standard input and output to the InfoMentor MCP server.
-            The server exposes eight default tools, five opt-in advanced tools, and four opt-in setup
+            The server exposes nine default tools, five opt-in advanced tools, and four opt-in setup
             tools, uses protected local credentials and session state, and communicates directly with
             InfoMentor HTTPS endpoints. Explicit fritidsschema writes are read back before success is
             reported.
@@ -326,10 +326,10 @@
             <text x="430" y="248" fill="white" font-size="12" font-weight="600">
               Public tool surface
             </text>
-            <text x="430" y="267" fill="#94a3b8" font-size="8">8 tools available by default</text>
+            <text x="430" y="267" fill="#94a3b8" font-size="8">9 tools available by default</text>
             <line x1="430" y1="282" x2="950" y2="282" stroke="#1e293b" />
             <text x="430" y="304" fill="#22d3ee" font-size="9" font-weight="600">
-              DEFAULT TOOLS (8)
+              DEFAULT TOOLS (9)
             </text>
             <text x="430" y="326" fill="#f8fafc" font-size="8.5">infomentor_session_status</text>
             <text x="430" y="344" fill="#f8fafc" font-size="8.5">infomentor_get_overview</text>
@@ -342,7 +342,7 @@
             <text x="430" y="434" fill="#f8fafc" font-size="8.5">
               infomentor_set_fritidsschema_comment
             </text>
-            <text x="430" y="452" fill="#f8fafc" font-size="8.5">infomentor_collect_updates</text>
+            <text x="430" y="452" fill="#f8fafc" font-size="8.5">infomentor_search_news • infomentor_collect_updates</text>
             <text x="700" y="304" fill="#a78bfa" font-size="9" font-weight="600">
               OPT-IN ADVANCED TOOLS (5)
             </text>

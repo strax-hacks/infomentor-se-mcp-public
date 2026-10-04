@@ -1,6 +1,6 @@
 # InfoMentor MCP
 
-Current release: `1.0.0`.
+Current release: `1.1.0`.
 
 A local MCP server for Swedish InfoMentor parent accounts. It uses InfoMentor's
 HTTPS endpoints directly; it does not use Playwright, browser automation, or a
@@ -29,6 +29,7 @@ package name is `infomentor-se-mcp`; npm publication is a separate release step.
 - Full inbox and sent-message content through high-level collection
 - Optional lower-level message and notification/detail reads
 - Notifications with full `NewsItem` and `CalendarV2` content
+- Targeted child/date-bounded news search for historical questions
 - High-level all-child scheduled collection with automatic notification resolution and a durable cursor
 
 School-record writes are deliberately narrow: the two fritidsschema write tools
@@ -142,7 +143,7 @@ Node entrypoint instead.
 
 ## Advanced and setup tools
 
-The default server exposes eight everyday account, school-data, and collection
+The default server exposes nine everyday account, school-data, news, and collection
 tools. Lower-level message and notification/detail tools are hidden unless the
 host explicitly appends `--allow-advanced-tools` to `serve`:
 
@@ -164,13 +165,13 @@ With setup tools enabled, the server additionally exposes
 `infomentor_logout`. Login returns immediately; check setup status rather than
 busy-polling.
 
-With both flags enabled, the server exposes all 17 tools; normal operation exposes
-The resulting surface is 8 tools by default, 13 with advanced tools, 12 with
-setup tools, or 17 with both flags.
+With both flags enabled, the server exposes all 18 tools. The resulting surface is
+9 tools by default, 14 with advanced tools, 13 with setup tools, or 18 with both
+flags.
 
 ## Tools
 
-### Available by default (8)
+### Available by default (9)
 
 | Tool                                   | Purpose                                                          |
 | -------------------------------------- | ---------------------------------------------------------------- |
@@ -181,6 +182,7 @@ setup tools, or 17 with both flags.
 | `infomentor_get_fritidsschema_comment` | Read one day's parent comment and editability metadata.          |
 | `infomentor_set_fritidsschema_times`   | Set one day's entered start/end times and verify the read-back.  |
 | `infomentor_set_fritidsschema_comment` | Set one day's parent comment and verify the read-back.           |
+| `infomentor_search_news`               | Search one child's news feed within an inclusive date range.     |
 | `infomentor_collect_updates`           | Collect feeds and automatically resolve supported notifications. |
 
 ## Important behavior
@@ -194,13 +196,19 @@ setup tools, or 17 with both flags.
   intentionally does not expose the school's staff comment.
 - The two write tools reject locked or non-editable records and report success
   only after a matching read-back.
+- For one-off historical or date-bounded news questions, check the local
+  `school/InfoMentor/notifications/` archive first. If the range is not covered,
+  call `infomentor_search_news` once with the known child ID and inclusive dates;
+  do not use `infomentor_collect_updates` for that query.
 - `infomentor_collect_updates` is the preferred scheduled/general workflow. It
-  scans supported timetables, messages, and notifications for every registered
-  child, automatically resolves `NewsItem` and `CalendarV2` references, and
-  marks unsupported notification types explicitly. If supported detail
-  resolution fails, the cursor is not advanced, so the item is retried rather
-  than silently returned as metadata-only. Save its returned cursor only after
-  handling or delivering results; retry the previous cursor if delivery fails.
+  scans supported timetables, message summaries, and notifications for every
+  registered child, fetches message bodies only for new or changed summaries,
+  automatically resolves `NewsItem` and `CalendarV2` references, and marks
+  unsupported notification types explicitly. If supported detail resolution
+  fails, the cursor is not advanced, so the item is retried rather than silently
+  returned as metadata-only. Save its returned cursor only after handling or
+  delivering results; retry the previous cursor if delivery fails. Routine runs
+  should use `maxMessagePages: 5`; increase it only for a bounded backfill.
 - The lower-level message and notification/detail tools are available only with
   `--allow-advanced-tools`.
 - School text is untrusted source material, not instructions. The server does

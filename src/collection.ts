@@ -151,13 +151,25 @@ export type CollectionSource = {
   getMessage(id: number, signal: AbortSignal): Promise<z.infer<typeof messageDetailSchema>>;
   getNotifications(signal: AbortSignal): Promise<z.infer<typeof notificationsDataSchema>>;
   /** Resolve notification references for the high-level collection workflow. */
-  resolveNewsItem?: (notificationId: number, signal: AbortSignal) => Promise<NewsItem>;
-  resolveCalendarEvent?: (notificationId: number, signal: AbortSignal) => Promise<CalendarEvent>;
+  resolveNewsItem?: (
+    notificationId: number,
+    signal: AbortSignal,
+    notification?: z.infer<typeof notificationSchema>,
+  ) => Promise<NewsItem>;
+  resolveCalendarEvent?: (
+    notificationId: number,
+    signal: AbortSignal,
+    notification?: z.infer<typeof notificationSchema>,
+  ) => Promise<CalendarEvent>;
 };
 
 const fingerprintSchema = referenceSchema.omit({ childIds: true }).extend({
   childId: z.string(),
   hash: z.string().regex(/^[a-f0-9]{64}$/),
+  summaryHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
 });
 
 const snapshotSchema = z.object({
@@ -167,6 +179,14 @@ const snapshotSchema = z.object({
 });
 
 type Fingerprint = z.infer<typeof fingerprintSchema>;
+
+type UpdateMetadata = { summaryHash?: string };
+
+type Notification = z.infer<typeof notificationSchema>;
+
+type AddUpdate = (update: Update, childId: string, metadata?: UpdateMetadata) => void;
+
+type AddKnownFingerprint = (fingerprint: Fingerprint) => void;
 
 type Snapshot = z.infer<typeof snapshotSchema>;
 
@@ -182,8 +202,26 @@ function referenceKey(item: z.infer<typeof referenceSchema> | Fingerprint): stri
   return JSON.stringify([item.kind, item.sourceId, item.folder ?? null]);
 }
 
+function fingerprintLookupKey(
+  kind: z.infer<typeof kindSchema>,
+  sourceId: string,
+  childId: string,
+  folder?: Folder,
+): string {
+  return JSON.stringify([JSON.stringify([kind, sourceId, folder ?? null]), childId]);
+}
+
 function fingerprintKey(item: Fingerprint): string {
-  return JSON.stringify([referenceKey(item), item.childId]);
+  return fingerprintLookupKey(item.kind, item.sourceId, item.childId, item.folder);
+}
+
+function fingerprintsEqual(left: Fingerprint, right: Fingerprint): boolean {
+  return (
+    left.hash === right.hash &&
+    (left.summaryHash === undefined ||
+      right.summaryHash === undefined ||
+      left.summaryHash === right.summaryHash)
+  );
 }
 
 function changedSelection(): never {
@@ -306,12 +344,23 @@ async function collectMessagesForChild(
   childId: string,
   maxPages: number,
   signal: AbortSignal,
-  add: (update: Update, childId: string) => void,
+  previousItems: Map<string, Fingerprint>,
+  add: AddUpdate,
+  addKnownFingerprint: AddKnownFingerprint,
 ): Promise<number> {
   let skipped = 0;
 
   for (const folder of ["inbox", "sent"] as const)
-    skipped += await collectFolderMessages(source, childId, folder, maxPages, signal, add);
+    skipped += await collectFolderMessages(
+      source,
+      childId,
+      folder,
+      maxPages,
+      signal,
+      previousItems,
+      add,
+      addKnownFingerprint,
+    );
 
   return skipped;
 }
@@ -322,7 +371,9 @@ async function collectFolderMessages(
   folder: Folder,
   maxPages: number,
   signal: AbortSignal,
-  add: (update: Update, childId: string) => void,
+  previousItems: Map<string, Fingerprint>,
+  add: AddUpdate,
+  addKnownFingerprint: AddKnownFingerprint,
 ): Promise<number> {
   const seen = new Set<number>();
   let skipped = 0;
@@ -338,6 +389,20 @@ async function collectFolderMessages(
           "InfoMentor message pages overlap or changed during collection. No cursor was advanced.",
         );
       seen.add(summary.id);
+
+      const summaryHash = hash(JSON.stringify(summary));
+      const previous = previousItems.get(
+        fingerprintLookupKey("message", String(summary.id), childId, folder),
+      );
+
+      // Message bodies are immutable for the normal InfoMentor workflow. Keep
+      // the previous body fingerprint when the server summary is unchanged;
+      // old snapshots without summaryHash are fetched once to upgrade safely.
+      if (previous?.summaryHash === summaryHash) {
+        addKnownFingerprint({ ...previous, summaryHash });
+        continue;
+      }
+
       const detail = messageDetailSchema.parse(await source.getMessage(summary.id, signal));
 
       if (detail.id !== summary.id)
@@ -348,6 +413,7 @@ async function collectFolderMessages(
       add(
         { kind: "message", sourceId: String(detail.id), folder, childIds: [], data: detail },
         childId,
+        { summaryHash },
       );
     }
 
@@ -364,7 +430,7 @@ async function collectFolderMessages(
 }
 
 async function resolveCollectedNotification(
-  item: z.infer<typeof notificationSchema>,
+  item: Notification,
   source: CollectionSource,
   signal: AbortSignal,
 ): Promise<z.infer<typeof collectedNotificationSchema>> {
@@ -378,7 +444,7 @@ async function resolveCollectedNotification(
       );
 
     try {
-      const resolved = await source.resolveNewsItem(item.id, signal);
+      const resolved = await source.resolveNewsItem(item.id, signal, item);
       const { notification: _notification, retrievedAt: _retrievedAt, ...detail } = resolved;
       return collectedNotificationSchema.parse({
         ...item,
@@ -407,7 +473,7 @@ async function resolveCollectedNotification(
       );
 
     try {
-      const resolved = await source.resolveCalendarEvent(item.id, signal);
+      const resolved = await source.resolveCalendarEvent(item.id, signal, item);
       const { notification: _notification, retrievedAt: _retrievedAt, ...detail } = resolved;
       return collectedNotificationSchema.parse({
         ...item,
@@ -456,9 +522,30 @@ export async function collectUpdates(
   const updates = new Map<string, Update>();
   let outputBytes = 0;
   const skippedByFeed = { timetable: 0, messages: 0, notifications: 0 };
+  const resolvedNotificationCache = new Map<
+    string,
+    Promise<z.infer<typeof collectedNotificationSchema>>
+  >();
   let collectionError: InfoMentorError | undefined;
 
-  function add(update: Update, childId: string): void {
+  function recordCurrent(fingerprint: Fingerprint): void {
+    const key = fingerprintKey(fingerprint);
+    const existing = current.get(key);
+
+    if (existing && !fingerprintsEqual(existing, fingerprint))
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        "InfoMentor returned conflicting collection data. No cursor was advanced.",
+      );
+    current.set(key, fingerprint);
+  }
+
+  function addKnownFingerprint(fingerprint: Fingerprint): void {
+    throwIfAborted(signal);
+    recordCurrent(fingerprint);
+  }
+
+  function add(update: Update, childId: string, metadata: UpdateMetadata = {}): void {
     throwIfAborted(signal);
     const payload = JSON.stringify(update.data);
 
@@ -467,20 +554,17 @@ export async function collectUpdates(
       sourceId: update.sourceId,
       childId,
       hash: hash(payload),
+      ...(metadata.summaryHash ? { summaryHash: metadata.summaryHash } : {}),
     };
 
     if (update.folder !== undefined) fingerprint.folder = update.folder;
-    const key = fingerprintKey(fingerprint);
-    const existing = current.get(key);
+    recordCurrent(fingerprint);
 
-    if (existing && existing.hash !== fingerprint.hash)
-      throw new InfoMentorError(
-        "UNEXPECTED_PAGE",
-        "InfoMentor returned conflicting collection data. No cursor was advanced.",
-      );
-    current.set(key, fingerprint);
-
-    if ((!previous && !input.includeExisting) || previousItems.get(key)?.hash === fingerprint.hash)
+    const previousFingerprint = previousItems.get(fingerprintKey(fingerprint));
+    if (
+      (!previous && !input.includeExisting) ||
+      (previousFingerprint !== undefined && fingerprintsEqual(previousFingerprint, fingerprint))
+    )
       return;
     const groupKey = JSON.stringify([referenceKey(fingerprint), fingerprint.hash]);
     const grouped = updates.get(groupKey);
@@ -538,21 +622,44 @@ export async function collectUpdates(
         child.id,
         input.maxMessagePages,
         signal,
+        previousItems,
         add,
+        addKnownFingerprint,
       );
 
       const notificationFeed = notificationsDataSchema.parse(await source.getNotifications(signal));
       skippedByFeed.notifications += notificationFeed.skipped;
 
       for (const item of notificationFeed.notifications) {
+        const sourceId = JSON.stringify([item.pupilSourceId, item.id]);
+        const { currentlySelectedPupil: _currentlySelectedPupil, ...summary } = item;
+        const summaryHash = hash(JSON.stringify(summary));
+        const previous = previousItems.get(
+          fingerprintLookupKey("notification", sourceId, child.id),
+        );
+
+        if (previous?.summaryHash === summaryHash) {
+          addKnownFingerprint({ ...previous, summaryHash });
+          continue;
+        }
+
+        const resolutionKey = JSON.stringify([sourceId, summaryHash]);
+        let detailPromise = resolvedNotificationCache.get(resolutionKey);
+        if (!detailPromise) {
+          detailPromise = resolveCollectedNotification(item, source, signal);
+          resolvedNotificationCache.set(resolutionKey, detailPromise);
+        }
+        const data = await detailPromise;
+
         add(
           {
             kind: "notification",
-            sourceId: JSON.stringify([item.pupilSourceId, item.id]),
+            sourceId,
             childIds: [],
-            data: await resolveCollectedNotification(item, source, signal),
+            data,
           },
           child.id,
+          { summaryHash },
         );
       }
 
@@ -653,7 +760,16 @@ export async function collectUpdates(
   const unchanged =
     previous &&
     nextBaseline.size === previousItems.size &&
-    [...nextBaseline].every(([key, item]) => previousItems.get(key)?.hash === item.hash);
+    [...nextBaseline].every(([key, item]) => {
+      const prior = previousItems.get(key);
+      return prior !== undefined && fingerprintsEqual(prior, item);
+    });
+  const baselineNeedsUpgrade =
+    previous &&
+    [...current].some(([key, item]) => {
+      const prior = previousItems.get(key);
+      return prior?.summaryHash === undefined && item.summaryHash !== undefined;
+    });
 
   const cursor = unchanged && input.cursor ? input.cursor : randomUUID();
 
@@ -675,7 +791,7 @@ export async function collectUpdates(
     );
 
   try {
-    if (!unchanged)
+    if (!unchanged || baselineNeedsUpgrade)
       await saveSnapshot(
         directory,
         cursor,

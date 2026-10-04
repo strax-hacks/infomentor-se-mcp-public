@@ -1,6 +1,6 @@
 {
   "name": "infomentor-se-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local MCP server for Swedish InfoMentor parent accounts with direct HTTP login",
   "keywords": [
     "infomentor",

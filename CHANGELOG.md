@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.0
+
+- Added `infomentor_search_news` for one-child, inclusive date-bounded news
+  searches without running the account-wide collector.
+- `infomentor_collect_updates` now avoids unchanged message bodies and unchanged
+  notification detail resolution while preserving its account-wide cursor
+  semantics.
+- Legacy collection snapshots are upgraded without replaying unchanged items;
+  partial feeds preserve their previous baselines and detail failures leave the
+  cursor retryable.
+
 ## 1.0.0
 
 - First standalone release of the Swedish InfoMentor MCP server.

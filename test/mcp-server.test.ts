@@ -39,6 +39,7 @@ test("the source MCP server speaks stdio, registers tools, and fails closed with
       "infomentor_get_fritidsschema",
       "infomentor_get_fritidsschema_comment",
       "infomentor_get_overview",
+      "infomentor_search_news",
       "infomentor_select_child",
       "infomentor_session_status",
       "infomentor_set_fritidsschema_comment",
@@ -92,6 +93,7 @@ test("advanced notification and message tools are opt-in", async () => {
       "infomentor_get_news_item",
       "infomentor_get_notifications",
       "infomentor_get_overview",
+      "infomentor_search_news",
       "infomentor_select_child",
       "infomentor_session_status",
       "infomentor_set_fritidsschema_comment",
@@ -126,7 +128,7 @@ test("setup tools remain independently opt-in", async () => {
     await client.connect(transport);
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name);
-    assert.equal(names.length, 12);
+    assert.equal(names.length, 13);
     assert.ok(names.includes("infomentor_login"));
     assert.ok(names.includes("infomentor_logout"));
     assert.ok(!names.includes("infomentor_get_notifications"));

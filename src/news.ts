@@ -11,6 +11,23 @@ export const newsItemRequestSchema = z
 
 export type NewsItemRequest = z.input<typeof newsItemRequestSchema>;
 
+export const newsSearchRequestSchema = z
+  .object({
+    /** Registered child ID from infomentor_get_overview; the feed is read in that child context. */
+    childId: z.string().min(1).max(1024),
+    /** Inclusive local calendar date, formatted YYYY-MM-DD. */
+    fromDate: z.iso.date(),
+    /** Inclusive local calendar date, formatted YYYY-MM-DD. */
+    toDate: z.iso.date(),
+  })
+  .strict()
+  .refine(({ fromDate, toDate }) => fromDate <= toDate, {
+    message: "fromDate must be on or before toDate",
+    path: ["toDate"],
+  });
+
+export type NewsSearchRequest = z.input<typeof newsSearchRequestSchema>;
+
 const newsRowIdSchema = z.union([
   z.number().int().positive(),
   z
@@ -73,8 +90,7 @@ export type NewsListResponse = z.infer<typeof newsListResponseSchema>;
 
 const linkSchema = z.object({ text: z.string(), href: z.string().min(1) });
 
-export const newsItemSchema = z.object({
-  notification: notificationSchema,
+const newsContentSchema = z.object({
   newsId: z.number().int().positive(),
   title: z.string(),
   contentHtml: z.string(),
@@ -88,10 +104,28 @@ export const newsItemSchema = z.object({
   images: z.array(linkSchema),
   attachments: z.array(linkSchema),
   skipped: z.number().int().nonnegative(),
+});
+
+export const newsItemSchema = newsContentSchema.extend({
+  notification: notificationSchema,
   retrievedAt: z.iso.datetime(),
 });
 
+export type NewsContent = z.infer<typeof newsContentSchema>;
 export type NewsItem = z.infer<typeof newsItemSchema>;
+
+export const newsSearchItemSchema = newsContentSchema;
+
+export const newsSearchSchema = z.object({
+  childId: z.string().min(1),
+  fromDate: z.iso.date(),
+  toDate: z.iso.date(),
+  items: z.array(newsSearchItemSchema),
+  skipped: z.number().int().nonnegative(),
+  retrievedAt: z.iso.datetime(),
+});
+
+export type NewsSearch = z.infer<typeof newsSearchSchema>;
 
 export function newsIdFromNotificationUrl(url: string): number | undefined {
   const match = /(?:^|\/)news\/(\d+)(?:[/?#]|$)/i.exec(url);
@@ -220,11 +254,7 @@ function attachmentLink(value: unknown): { text: string; href: string } | undefi
   return { text: text ?? "Attachment", href };
 }
 
-export function buildNewsItem(
-  notification: z.infer<typeof notificationSchema>,
-  row: NewsItemRow,
-  skipped: number,
-): NewsItem {
+export function buildNewsContent(row: NewsItemRow, skipped: number): NewsContent {
   const document = parseDocument(row.content);
   const root = document.children as unknown as HtmlNode[];
   const links: Array<{ text: string; href: string }> = [];
@@ -239,8 +269,7 @@ export function buildNewsItem(
     .filter((item): item is { text: string; href: string } => item !== undefined);
   const bodyText = textFromNodes(root);
 
-  return newsItemSchema.parse({
-    notification,
+  return newsContentSchema.parse({
     newsId: row.id,
     title: row.title.trim(),
     contentHtml: row.content,
@@ -254,6 +283,17 @@ export function buildNewsItem(
     images,
     attachments,
     skipped,
+  });
+}
+
+export function buildNewsItem(
+  notification: z.infer<typeof notificationSchema>,
+  row: NewsItemRow,
+  skipped: number,
+): NewsItem {
+  return newsItemSchema.parse({
+    notification,
+    ...buildNewsContent(row, skipped),
     retrievedAt: new Date().toISOString(),
   });
 }
