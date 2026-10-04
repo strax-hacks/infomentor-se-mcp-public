@@ -147,13 +147,13 @@ The default server exposes nine everyday account, school-data, news, and collect
 tools. Lower-level message and notification/detail tools are hidden unless the
 host explicitly appends `--allow-advanced-tools` to `serve`:
 
-| Advanced tool                   | Purpose                                                   |
-| ------------------------------- | --------------------------------------------------------- |
-| `infomentor_get_messages`       | List inbox or sent messages with paging and search.       |
-| `infomentor_get_message`        | Read one message body by its numeric ID.                  |
-| `infomentor_get_notifications`  | Read the currently available notification feed.           |
-| `infomentor_get_news_item`      | Resolve a `NewsItem` notification ID to its full article. |
-| `infomentor_get_calendar_event` | Resolve a `CalendarV2` notification ID to its full event. |
+| Advanced tool                   | Purpose                                                            |
+| ------------------------------- | ------------------------------------------------------------------ |
+| `infomentor_get_messages`       | List messages in a verified child context, with paging and search. |
+| `infomentor_get_message`        | Read one message body in a verified child context.                 |
+| `infomentor_get_notifications`  | Read the available notifications in a verified child context.      |
+| `infomentor_get_news_item`      | Resolve a `NewsItem` notification ID to its full article.          |
+| `infomentor_get_calendar_event` | Resolve a `CalendarV2` notification ID to its full event.          |
 
 By default the server does not expose account setup mutations either. Append
 `--allow-setup-tools` to `serve` only when the MCP host must perform login,
@@ -187,8 +187,12 @@ flags.
 
 ## Important behavior
 
+- Every child-context-dependent read or write must use the intended child ID. Tools that accept `childId` select and verify it before making context-dependent requests; tools without a child ID either derive the child from the notification or intentionally operate on the currently selected child. Results from messages and notifications report the effective selected child. Never infer a child from stale session state or from `currentlySelectedPupil` alone. Selection changes the upstream session context, not school records.
 - Discover child IDs from `infomentor_get_overview`; never reuse IDs from another
-  account. Selection changes the upstream session context, not school records.
+  account. Pass `childId` to `infomentor_get_overview`, `infomentor_get_messages`,
+  `infomentor_get_message`, or `infomentor_get_notifications` when the requested
+  child may differ from the current selection. `infomentor_select_child` remains
+  available when an explicit persistent selection change is desired.
 - Use an explicit local `YYYY-MM-DD` date for fritidsschema operations. Values
   are not inferred from the ordinary school timetable.
 - `infomentor_get_fritidsschema_comment` is read-only and returns the signed-in

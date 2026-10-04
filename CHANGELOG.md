@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Child-context-dependent overview, message, and notification reads can receive
+  an explicit `childId`; the client selects and verifies that child before the
+  request and reports the effective selected child in the result.
+- Updated public tool descriptions and instructions to treat child selection
+  as mutable session state rather than trusting a previous selection.
+
 ## 1.1.0
 
 - Added `infomentor_search_news` for one-child, inclusive date-bounded news

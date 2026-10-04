@@ -199,12 +199,21 @@ export const overviewSchema = z.object({
 
 export type Overview = z.infer<typeof overviewSchema>;
 
+/** Optional target for overview; omitted means inspect the currently selected child. */
+export const overviewRequestSchema = z
+  .object({ childId: z.string().min(1).max(1024).optional() })
+  .strict();
+
+export type OverviewRequest = z.input<typeof overviewRequestSchema>;
+
 export const selectChildRequestSchema = z.object({ childId: z.string().min(1).max(1024) }).strict();
 
 export type SelectChildRequest = z.infer<typeof selectChildRequestSchema>;
 
 export const messagesRequestSchema = z
   .object({
+    /** If supplied, select and verify this child before reading the context-dependent feed. */
+    childId: z.string().min(1).max(1024).optional(),
     folder: z.enum(["inbox", "sent"]).default("inbox"),
     search: z.string().max(500).default(""),
     page: z.number().int().min(1).max(100_000).default(1),
@@ -212,10 +221,18 @@ export const messagesRequestSchema = z
   })
   .strict();
 
-export const messageRequestSchema = z.object({ id: z.number().int().positive() }).strict();
+export const messageRequestSchema = z
+  .object({
+    id: z.number().int().positive(),
+    /** If supplied, select and verify this child before reading the message context. */
+    childId: z.string().min(1).max(1024).optional(),
+  })
+  .strict();
 
 export const notificationsRequestSchema = z
   .object({
+    /** If supplied, select and verify this child before reading the notification feed. */
+    childId: z.string().min(1).max(1024).optional(),
     selectedChildOnly: z.boolean().default(false),
     includeCleared: z.boolean().default(false),
   })
@@ -252,10 +269,12 @@ export const messagesSchema = messagesPageSchema.extend({
   page: z.number().int().positive(),
   pageSize: z.number().int().positive(),
   folder: z.enum(["inbox", "sent"]),
+  selectedChildId: z.string().min(1),
   retrievedAt: z.iso.datetime(),
 });
 
 export const messageSchema = z.object({
+  selectedChildId: z.string().min(1),
   message: messageDetailSchema,
   retrievedAt: z.iso.datetime(),
 });
@@ -293,6 +312,7 @@ export const notificationsResponseSchema = z
   });
 
 export const notificationsSchema = notificationsDataSchema.extend({
+  childId: z.string().min(1),
   selectedChildOnly: z.boolean(),
   includeCleared: z.boolean(),
   retrievedAt: z.iso.datetime(),

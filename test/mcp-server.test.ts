@@ -46,6 +46,19 @@ test("the source MCP server speaks stdio, registers tools, and fails closed with
       "infomentor_set_fritidsschema_times",
     ]);
     assert.ok(tools.every((tool) => tool.outputSchema));
+    const overviewTool = tools.find((tool) => tool.name === "infomentor_get_overview");
+    const overviewInput = overviewTool?.inputSchema as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    assert.ok(overviewInput?.properties?.childId);
+    assert.match(
+      tools.find((tool) => tool.name === "infomentor_get_overview")?.description ?? "",
+      /Pass childId to select and verify/,
+    );
+    assert.match(
+      tools.find((tool) => tool.name === "infomentor_select_child")?.description ?? "",
+      /Later reads are context-dependent/,
+    );
 
     const status = await client.callTool({ name: "infomentor_session_status", arguments: {} });
     z.object({ authenticated: z.literal(false) }).parse(status.structuredContent);
@@ -99,6 +112,26 @@ test("advanced notification and message tools are opt-in", async () => {
       "infomentor_set_fritidsschema_comment",
       "infomentor_set_fritidsschema_times",
     ]);
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    assert.match(
+      byName.get("infomentor_get_messages")?.description ?? "",
+      /Pass childId to select and verify/,
+    );
+    assert.match(byName.get("infomentor_get_message")?.description ?? "", /Pass the same childId/);
+    assert.match(
+      byName.get("infomentor_get_notifications")?.description ?? "",
+      /verified child context/,
+    );
+    for (const name of [
+      "infomentor_get_messages",
+      "infomentor_get_message",
+      "infomentor_get_notifications",
+    ]) {
+      const inputSchema = byName.get(name)?.inputSchema as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      assert.ok(inputSchema?.properties?.childId);
+    }
   } finally {
     await client.close();
     await rm(directory, { recursive: true, force: true });

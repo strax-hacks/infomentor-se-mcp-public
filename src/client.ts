@@ -65,6 +65,7 @@ import {
 import type { InfoMentorHttp } from "./http.js";
 import {
   InfoMentorError,
+  overviewRequestSchema,
   selectChildRequestSchema,
   messagesRequestSchema,
   messageRequestSchema,
@@ -78,6 +79,7 @@ import {
   throwIfAborted,
   writeSession,
   type Overview,
+  type OverviewRequest,
   type SelectChildRequest,
   type SessionOptions,
   type SessionStatus,
@@ -309,8 +311,12 @@ export class InfoMentorClient {
     return current;
   }
 
-  getOverview(signal?: AbortSignal): Promise<Overview> {
-    return this.read((http, activeSignal) => this.overview(http, activeSignal), signal);
+  getOverview(request: OverviewRequest = {}, signal?: AbortSignal): Promise<Overview> {
+    const input = overviewRequestSchema.parse(request);
+    return this.read(
+      (http, activeSignal) => this.overview(http, activeSignal, input.childId),
+      signal,
+    );
   }
 
   selectChild(request: SelectChildRequest, signal?: AbortSignal): Promise<Overview> {
@@ -699,6 +705,39 @@ export class InfoMentorClient {
     }, collectionSignal);
   }
 
+  private currentSelectedChildId(http: InfoMentorHttp): string {
+    const selected = http.parent?.account.pupils.filter((pupil) => pupil.selected) ?? [];
+
+    if (selected.length !== 1 || !selected[0])
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        "InfoMentor did not identify exactly one selected child. Refresh infomentor_get_overview before continuing.",
+      );
+
+    return selected[0].id;
+  }
+
+  /** Selects and verifies an optional target, then returns the effective context. */
+  private async ensureSelectedChild(
+    http: InfoMentorHttp,
+    signal: AbortSignal,
+    childId?: string,
+  ): Promise<string> {
+    const current = this.currentSelectedChildId(http);
+    if (childId === undefined || childId === current) return current;
+
+    await http.readParent(signal, childId);
+    const verified = this.currentSelectedChildId(http);
+
+    if (verified !== childId)
+      throw new InfoMentorError(
+        "UNEXPECTED_PAGE",
+        "InfoMentor did not confirm the requested child. Selection may have changed; refresh infomentor_get_overview before continuing.",
+      );
+
+    return verified;
+  }
+
   private async overview(
     http: InfoMentorHttp,
     signal: AbortSignal,
@@ -762,6 +801,7 @@ export class InfoMentorClient {
     const input = messagesRequestSchema.parse(request);
 
     return this.read(async (http, activeSignal) => {
+      const selectedChildId = await this.ensureSelectedChild(http, activeSignal, input.childId);
       const data = await http.readAppData(
         "Message/message/GetMessages",
         {
@@ -781,26 +821,29 @@ export class InfoMentorClient {
         page: input.page,
         pageSize: input.pageSize,
         folder: input.folder,
+        selectedChildId,
         retrievedAt: new Date().toISOString(),
       };
     }, signal);
   }
 
   getMessage(request: MessageRequest, signal?: AbortSignal): Promise<Message> {
-    const { id } = messageRequestSchema.parse(request);
+    const input = messageRequestSchema.parse(request);
 
-    return this.read(
-      async (http, activeSignal) => ({
+    return this.read(async (http, activeSignal) => {
+      const selectedChildId = await this.ensureSelectedChild(http, activeSignal, input.childId);
+
+      return {
+        selectedChildId,
         message: await http.readAppData(
           "Message/message/GetMessage",
-          { id: String(id) },
+          { id: String(input.id) },
           messageDetailSchema,
           activeSignal,
         ),
         retrievedAt: new Date().toISOString(),
-      }),
-      signal,
-    );
+      };
+    }, signal);
   }
 
   searchNews(request: NewsSearchRequest, signal?: AbortSignal): Promise<NewsSearch> {
@@ -1044,6 +1087,7 @@ export class InfoMentorClient {
     const input = notificationsRequestSchema.parse(request);
 
     return this.read(async (http, activeSignal) => {
+      const selectedChildId = await this.ensureSelectedChild(http, activeSignal, input.childId);
       const data = await http.readAppData(
         "NotificationApp/NotificationApp/appData",
         {},
@@ -1052,13 +1096,15 @@ export class InfoMentorClient {
       );
 
       return {
+        childId: selectedChildId,
         notifications: data.notifications.filter(
           (item) =>
             (input.includeCleared || item.state !== "Cleared") &&
             (!input.selectedChildOnly || item.currentlySelectedPupil),
         ),
         skipped: data.skipped,
-        ...input,
+        selectedChildOnly: input.selectedChildOnly,
+        includeCleared: input.includeCleared,
         retrievedAt: new Date().toISOString(),
       };
     }, signal);
