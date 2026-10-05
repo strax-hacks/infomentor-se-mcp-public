@@ -12,14 +12,25 @@ change the MCP protocol or add a hosted service.
 2. Use an npm account with two-factor authentication enabled.
 3. Publish the first package version manually. npm must know the package before
    its Trusted Publisher can be configured.
-4. After the first package exists, configure npm Trusted Publishing in the
-   package settings:
-   - provider: GitHub Actions
-   - owner: `strax-hacks`
-   - repository: `infomentor-se-mcp-public`
-   - workflow: `publish.yml`
-   - environment: leave empty unless the workflow is later protected by a
-     GitHub environment
+After the first package exists, configure npm Trusted Publishing in the
+package settings (or with npm 11.15+):
+
+- provider: GitHub Actions
+- owner: `strax-hacks`
+- repository: `infomentor-se-mcp-public`
+- workflow: `publish.yml`
+- environment: leave empty unless the workflow is later protected by a
+  GitHub environment
+
+The equivalent authenticated CLI command is:
+
+```sh
+npm trust github infomentor-se-mcp \
+  --repo strax-hacks/infomentor-se-mcp-public \
+  --file publish.yml \
+  --allow-publish \
+  --yes
+```
 
 Trusted Publishing is used by `.github/workflows/publish.yml`; no long-lived
 npm token belongs in the repository or in GitHub secrets.
