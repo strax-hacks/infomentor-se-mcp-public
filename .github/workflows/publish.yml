@@ -1,0 +1,91 @@
+name: Publish npm package
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(node -p 'require("./package.json").version')"
+          test "$tag_version" = "$package_version"
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Check formatting
+        run: bun run format:check
+
+      - name: Run tests
+        run: bun test --timeout 30000
+
+      - name: Build npm entrypoint
+        run: npm run build
+
+      - name: Inspect npm package
+        run: npm pack --dry-run
+
+      - name: Check whether this version is already published
+        id: registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./package.json").version')"
+          registry_url="https://registry.npmjs.org/infomentor-se-mcp/${version}"
+          if ! status="$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' "$registry_url")"; then
+            echo "The npm registry lookup failed." >&2
+            exit 1
+          fi
+          case "$status" in
+            200)
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              echo "infomentor-se-mcp@${version} already exists; skipping duplicate publish."
+              ;;
+            404)
+              echo "published=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unexpected npm registry status: $status" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Publish with npm provenance
+        if: steps.registry.outputs.published != 'true'
+        run: npm publish --provenance

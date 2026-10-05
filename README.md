@@ -13,13 +13,13 @@ remote credential relay.
 
 The project supports both a conventional npm distribution and a source checkout:
 
-- **npm / `npx` (recommended after the first registry release):** Node.js 20+
-  runs the built `dist/cli.js` entrypoint. Bun is not required by users.
+- **npm / `npx`:** Node.js 20+ runs the built `dist/cli.js` entrypoint. Bun is
+  not required by users.
 - **Source checkout:** Bun 1.4.2 runs the TypeScript source through the included
-  launcher. This remains useful for development and before the first npm release.
+  launcher. This remains useful for development and troubleshooting.
 
-The package is npm-ready, but it has not been published to the registry yet. The
-package name is `infomentor-se-mcp`; npm publication is a separate release step.
+The package name is `infomentor-se-mcp`. The release workflow and the one-time
+npm Trusted Publisher setup are documented in [RELEASING.md](RELEASING.md).
 
 ## What it provides
 
@@ -57,11 +57,10 @@ full self-contained visual diagram.
 
 ## Install and configure with npm
 
-After the first registry release, verify the package and configure it as a
-standard MCP stdio server:
+Verify the published package and configure it as a standard MCP stdio server:
 
 ```sh
-npx -y infomentor-se-mcp --version
+npx -y infomentor-se-mcp@1.1.0 --version
 ```
 
 ```json
@@ -69,7 +68,7 @@ npx -y infomentor-se-mcp --version
   "mcpServers": {
     "infomentor": {
       "command": "npx",
-      "args": ["-y", "infomentor-se-mcp"],
+      "args": ["-y", "infomentor-se-mcp@1.1.0"],
       "env": {
         "INFOMENTOR_SE_SESSION_PATH": "/absolute/path/infomentor-session.json",
         "INFOMENTOR_SE_CREDENTIALS_FILE": "/absolute/path/credentials.json"
@@ -128,7 +127,7 @@ The repository itself does not read a host-specific `.env` file.
 
 ## Source checkout
 
-Use this path for development or before the first npm release:
+Use this path for development or when you need to run the TypeScript source directly:
 
 ```sh
 git clone https://github.com/strax-hacks/infomentor-se-mcp-public.git
@@ -262,5 +261,6 @@ install the generated tarball in an empty Node 20+ directory and verify:
 ./node_modules/.bin/infomentor-se-mcp --help
 ```
 
-See [CHANGELOG.md](CHANGELOG.md) for behavior changes and
-[ATTRIBUTION.md](ATTRIBUTION.md) for provenance and licensing.
+See [CHANGELOG.md](CHANGELOG.md) for behavior changes,
+[ATTRIBUTION.md](ATTRIBUTION.md) for provenance and licensing, and
+[RELEASING.md](RELEASING.md) for maintainer release steps.
