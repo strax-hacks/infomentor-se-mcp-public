@@ -45,23 +45,27 @@ of this package and must be handled by a separate authorized workflow.
 
 ## Architecture
 
-The [server architecture diagram](docs/architecture.html) shows the host-neutral
-MCP boundary, stdio transport, complete tool surface, protected credential and
-session state, and the direct InfoMentor HTTPS paths. It does not assume a
-specific MCP client or orchestration platform.
-
-![InfoMentor MCP server architecture](docs/architecture.svg)
-
-[Open the standalone HTML version](docs/architecture.html) in a browser for the
-full self-contained visual diagram.
+The published package is a local, host-neutral MCP stdio server. An MCP host
+starts it as a child process; it keeps credentials and session state on the
+user's machine and calls InfoMentor directly over HTTPS. It exposes nine
+ordinary tools by default, with advanced and setup tools available only when
+explicitly enabled. No hosted HTTP service, browser automation, or remote
+credential relay is required.
 
 ## Install and configure with npm
 
-Verify the published package and configure it as a standard MCP stdio server:
+The recommended user path is the published npm package. Node.js 20+ and npm
+are required; Bun is not required.
+
+First verify the package from a terminal:
 
 ```sh
 npx -y infomentor-se-mcp@1.1.0 --version
+npx -y infomentor-se-mcp@1.1.0 --help
 ```
+
+Then add the server to the MCP host's configuration. This is the standard
+stdio shape used by Claude Desktop, Cursor, Hermes, and other MCP hosts:
 
 ```json
 {
@@ -78,9 +82,25 @@ npx -y infomentor-se-mcp@1.1.0 --version
 }
 ```
 
-All paths should be absolute. If the host provides secure secret injection, use
-`INFOMENTOR_SE_USERNAME` and `INFOMENTOR_SE_PASSWORD` instead of a credentials
-file. Restart the MCP host after changing its environment.
+Use absolute paths. The exact `@1.1.0` version keeps the host reproducible;
+change it deliberately when upgrading. `@latest` is also supported when you
+prefer automatic adoption of the newest published version.
+
+`INFOMENTOR_SE_CREDENTIALS_FILE` is optional but recommended when automatic
+session renewal is wanted. Instead, a host with secure secret injection may
+provide `INFOMENTOR_SE_USERNAME` and `INFOMENTOR_SE_PASSWORD`. Do not put
+passwords in repository files, MCP arguments, or shell history. Restart the
+MCP host after changing its command or environment.
+
+To expose the opt-in advanced tools, add the `serve` command and flag:
+
+```json
+"args": ["-y", "infomentor-se-mcp@1.1.0", "serve", "--allow-advanced-tools"]
+```
+
+Only enable `--allow-setup-tools` when the host must expose login, setup-status,
+cancellation, or logout as MCP tools. The safer default is to run `login` and
+`status` from a terminal as shown below.
 
 ## Sign in
 
