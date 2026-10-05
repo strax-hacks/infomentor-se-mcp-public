@@ -82,37 +82,20 @@ automatically with npm provenance.
 
 ## Future releases
 
-1. Update `version` in `package.json` and add a versioned entry to
-   `CHANGELOG.md`.
-2. Run the local quality gates and inspect the package contents:
+Add a new `## X.Y.Z` heading and its release notes at the top of
+`CHANGELOG.md`, then run:
 
-   ```sh
-   bun install --frozen-lockfile
-   bun run typecheck
-   bun run lint
-   bun run format:check
-   bun test --timeout 30000
-   npm run build
-   npm pack --dry-run
-   ```
+```sh
+./release.sh X.Y.Z
+```
 
-3. Commit and push the release change. Wait for the normal CI workflow to pass.
-4. Create and push an annotated tag whose version exactly matches
-   `package.json`:
-
-   ```sh
-   git tag -a vX.Y.Z -m "Release InfoMentor MCP X.Y.Z"
-   git push origin vX.Y.Z
-   ```
-
-5. The `Publish npm package` workflow validates the tag, repeats the quality
-   gates, builds the Node entrypoint, and publishes with npm provenance.
-6. Verify the registry and executable:
-
-   ```sh
-   npm view infomentor-se-mcp@X.Y.Z version dist.tarball
-   npx -y infomentor-se-mcp@X.Y.Z --version
-   ```
+The script checks the main branch and clean worktree, verifies npm/GitHub
+authentication and the Trusted Publisher reminder, updates `package.json` and
+the pinned README version, runs all quality gates, commits and pushes the
+release, waits for CI, asks before pushing the publication-triggering tag,
+waits for the npm workflow, creates the GitHub release, and verifies both npm
+and a fresh `npx` consumer. It never asks for or handles an npm password or
+2FA code.
 
 A published name/version pair cannot be reused. If a published version has a
 problem, deprecate it and publish the next patch version instead of trying to
