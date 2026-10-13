@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 
 - Item-local notification detail failures return `detailStatus: "pending"` with
   a safe `detailError` while complete items can proceed. Pending details retry
@@ -15,7 +15,7 @@
   the feed read, share calendar feed caches, and restore the original selection.
   Incomplete feeds stay pending and are retried; exact-event reads remain strict.
 - The source tool surface is 9 default, 15 advanced, 13 setup, or 19 combined.
-  These changes are not yet published in npm `1.1.0`.
+  These changes are included in npm `1.2.0`.
 
 ## 1.1.0
 

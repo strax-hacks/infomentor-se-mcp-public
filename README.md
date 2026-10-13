@@ -1,6 +1,6 @@
 # InfoMentor MCP
 
-Current release: `1.1.0`.
+Current release: `1.2.0`.
 
 A local MCP server for Swedish InfoMentor parent accounts. It uses InfoMentor's
 HTTPS endpoints directly; it does not use Playwright, browser automation, or a
@@ -60,8 +60,8 @@ are required; Bun is not required.
 First verify the package from a terminal:
 
 ```sh
-npx -y infomentor-se-mcp@1.1.0 --version
-npx -y infomentor-se-mcp@1.1.0 --help
+npx -y infomentor-se-mcp@1.2.0 --version
+npx -y infomentor-se-mcp@1.2.0 --help
 ```
 
 Then add the server to the MCP host's configuration. This is the standard
@@ -72,7 +72,7 @@ stdio shape used by Claude Desktop, Cursor, Hermes, and other MCP hosts:
   "mcpServers": {
     "infomentor": {
       "command": "npx",
-      "args": ["-y", "infomentor-se-mcp@1.1.0"],
+      "args": ["-y", "infomentor-se-mcp@1.2.0"],
       "env": {
         "INFOMENTOR_SE_SESSION_PATH": "/absolute/path/infomentor-session.json",
         "INFOMENTOR_SE_CREDENTIALS_FILE": "/absolute/path/credentials.json"
@@ -82,7 +82,7 @@ stdio shape used by Claude Desktop, Cursor, Hermes, and other MCP hosts:
 }
 ```
 
-Use absolute paths. The exact `@1.1.0` version keeps the host reproducible;
+Use absolute paths. The exact `@1.2.0` version keeps the host reproducible;
 change it deliberately when upgrading. `@latest` is also supported when you
 prefer automatic adoption of the newest published version.
 
@@ -95,7 +95,7 @@ MCP host after changing its command or environment.
 To expose the opt-in advanced tools, add the `serve` command and flag:
 
 ```json
-"args": ["-y", "infomentor-se-mcp@1.1.0", "serve", "--allow-advanced-tools"]
+"args": ["-y", "infomentor-se-mcp@1.2.0", "serve", "--allow-advanced-tools"]
 ```
 
 Only enable `--allow-setup-tools` when the host must expose login, setup-status,
@@ -185,10 +185,9 @@ With setup tools enabled, the server additionally exposes
 `infomentor_logout`. Login returns immediately; check setup status rather than
 busy-polling.
 
-With both flags enabled, the current source server exposes all 19 tools. The surface is
+With both flags enabled, the server exposes all 19 tools. The surface is
 9 tools by default, 15 with advanced tools, 13 with setup tools, or 19 with both
-flags. Calendar-week support is an unreleased source change; the published `1.1.0`
-package retains its previous tool surface until the next release.
+flags. Calendar-week support is included in `1.2.0`.
 
 ## Calendar notifications: exact events and whole weeks
 

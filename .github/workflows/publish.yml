@@ -32,6 +32,11 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      - name: Install npm with Trusted Publishing support
+        run: npm install --global npm@11
+
+      # Release names are read from the runner environment, never interpolated
+      # from event payloads into shell commands.
       - name: Verify tag matches package version
         shell: bash
         run: |
