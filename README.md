@@ -1,6 +1,7 @@
 # InfoMentor MCP
 
-Current release: `1.2.0`.
+Release candidate: `1.2.0` (Git tag available; npm publication is pending publisher authorization).
+The npm `latest` version remains `1.1.0`; the `1.2.0` examples below become usable once publication succeeds.
 
 A local MCP server for Swedish InfoMentor parent accounts. It uses InfoMentor's
 HTTPS endpoints directly; it does not use Playwright, browser automation, or a
