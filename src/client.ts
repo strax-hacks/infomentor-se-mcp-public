@@ -46,6 +46,11 @@ import {
   type CalendarEntriesResponse,
   type CalendarEvent,
   type CalendarEventRequest,
+  calendarWeekRequestSchema,
+  calendarWeekSchema,
+  calendarWeekRangeFromNotification,
+  type CalendarWeek,
+  type CalendarWeekRequest,
 } from "./calendar.js";
 import {
   buildNewsContent,
@@ -701,6 +706,8 @@ export class InfoMentorClient {
           this.resolveNewsItem(http, notificationId, nextSignal, notification, resolverCaches),
         resolveCalendarEvent: (notificationId, nextSignal, notification) =>
           this.resolveCalendarEvent(http, notificationId, nextSignal, notification, resolverCaches),
+        resolveCalendarWeek: (notificationId, nextSignal, notification) =>
+          this.resolveCalendarWeek(http, notificationId, nextSignal, notification, resolverCaches),
       });
     }, collectionSignal);
   }
@@ -897,6 +904,61 @@ export class InfoMentorClient {
     );
   }
 
+  /** Selection/restoration failures must never be downgraded to pending details. */
+  private async readNotificationParent(
+    http: InfoMentorHttp,
+    signal: AbortSignal,
+    childId: string,
+  ): Promise<void> {
+    const accountId = http.parent?.account.currentUser.id;
+    try {
+      const parent = await http.readParent(signal, childId);
+      if (!accountId || parent.account.currentUser.id !== accountId)
+        throw new InfoMentorError(
+          "INVALID_SESSION",
+          "The notification account changed during resolution.",
+        );
+    } catch (error) {
+      throwIfAborted(signal);
+      if (
+        error instanceof InfoMentorError &&
+        !["INVALID_CONFIGURATION", "UNEXPECTED_PAGE", "NOT_FOUND"].includes(error.code)
+      )
+        throw error;
+      throw new InfoMentorError(
+        "INVALID_SESSION",
+        "InfoMentor could not verify the notification child context. No cursor was advanced.",
+      );
+    }
+  }
+
+  getCalendarWeek(request: CalendarWeekRequest, signal?: AbortSignal): Promise<CalendarWeek> {
+    const { notificationId } = calendarWeekRequestSchema.parse(request);
+    return this.read(
+      (http, activeSignal) => this.resolveCalendarWeek(http, notificationId, activeSignal),
+      signal,
+    );
+  }
+
+  private async resolveCalendarWeek(
+    http: InfoMentorHttp,
+    notificationId: number,
+    signal: AbortSignal,
+    suppliedNotification?: Notification,
+    resolverCaches?: ResolverCaches,
+  ): Promise<CalendarWeek> {
+    return calendarWeekSchema.parse(
+      await this.resolveCalendarReference(
+        http,
+        notificationId,
+        signal,
+        suppliedNotification,
+        resolverCaches,
+        true,
+      ),
+    );
+  }
+
   private async resolveCalendarEvent(
     http: InfoMentorHttp,
     notificationId: number,
@@ -904,6 +966,26 @@ export class InfoMentorClient {
     suppliedNotification?: Notification,
     resolverCaches?: ResolverCaches,
   ): Promise<CalendarEvent> {
+    const result = await this.resolveCalendarReference(
+      http,
+      notificationId,
+      signal,
+      suppliedNotification,
+      resolverCaches,
+      false,
+    );
+    if ("kind" in result) throw new Error("Unexpected calendar week.");
+    return result;
+  }
+
+  private async resolveCalendarReference(
+    http: InfoMentorHttp,
+    notificationId: number,
+    signal: AbortSignal,
+    suppliedNotification: Notification | undefined,
+    resolverCaches: ResolverCaches | undefined,
+    wholeWeek: boolean,
+  ): Promise<CalendarEvent | CalendarWeek> {
     let notification = suppliedNotification;
 
     if (!notification) {
@@ -923,8 +1005,9 @@ export class InfoMentorClient {
       );
 
     if (
-      notification.appType !== "CalendarV2" &&
-      !notification.type.toLowerCase().startsWith("calendarv2")
+      (wholeWeek && !["CalendarV2", "CalendarV2EventCreated"].includes(notification.type)) ||
+      (notification.appType !== "CalendarV2" &&
+        !notification.type.toLowerCase().startsWith("calendarv2"))
     )
       throw new InfoMentorError(
         "INVALID_CONFIGURATION",
@@ -932,10 +1015,10 @@ export class InfoMentorClient {
       );
 
     const eventId = calendarEventIdFromNotificationUrl(notification.url);
-    if (!eventId)
+    if (!wholeWeek && !eventId)
       throw new InfoMentorError(
-        "UNEXPECTED_PAGE",
-        "InfoMentor returned a CalendarV2 notification without a supported event ID.",
+        "NOT_FOUND",
+        "This CalendarV2 notification links to a week without an event ID; an exact event cannot be safely resolved.",
       );
 
     const currentParent = http.parent;
@@ -955,10 +1038,12 @@ export class InfoMentorClient {
       );
 
     const switchedChild = targetChildId !== originalChildId;
-    if (switchedChild) await http.readParent(signal, targetChildId);
+    if (switchedChild) await this.readNotificationParent(http, signal, targetChildId);
 
     try {
-      const range = calendarRangeFromNotification(notification.url, notification.dateSent);
+      const range = wholeWeek
+        ? calendarWeekRangeFromNotification(notification.url)
+        : calendarRangeFromNotification(notification.url, notification.dateSent);
       const feedKey = JSON.stringify([targetChildId, range]);
       let feedPromise = resolverCaches?.calendarFeeds.get(feedKey);
       if (!feedPromise) {
@@ -971,6 +1056,36 @@ export class InfoMentorClient {
         resolverCaches?.calendarFeeds.set(feedKey, feedPromise);
       }
       const feed = await feedPromise;
+      // Never attribute a feed to a child after shared session context drift.
+      // Read without selecting: selecting here would hide the changed context.
+      const confirmedParent = await http.readParent(signal);
+      const roster = (parent: NonNullable<typeof currentParent>) =>
+        parent.account.pupils
+          .map((pupil) => pupil.id)
+          .sort()
+          .join("|");
+      if (
+        !currentParent ||
+        confirmedParent.account.currentUser.id !== currentParent.account.currentUser.id ||
+        confirmedParent.account.pupils.find((pupil) => pupil.selected)?.id !== targetChildId ||
+        roster(confirmedParent) !== roster(currentParent)
+      )
+        throw new InfoMentorError(
+          "INVALID_SESSION",
+          "InfoMentor calendar account or child context changed during the feed read.",
+        );
+      if (wholeWeek)
+        return calendarWeekSchema.parse({
+          kind: "calendar_week",
+          notification,
+          childId: targetChildId,
+          ...range,
+          events: feed.items.map((row) =>
+            buildCalendarEvent(notification, row, targetChildId, feed.skipped),
+          ),
+          skipped: feed.skipped,
+          retrievedAt: new Date().toISOString(),
+        });
       const row = feed.items.find((item) => item.id === eventId);
 
       if (!row)
@@ -981,7 +1096,7 @@ export class InfoMentorClient {
 
       return buildCalendarEvent(notification, row, targetChildId, feed.skipped);
     } finally {
-      if (switchedChild) await http.readParent(signal, originalChildId);
+      if (switchedChild) await this.readNotificationParent(http, signal, originalChildId);
     }
   }
 
@@ -1051,7 +1166,7 @@ export class InfoMentorClient {
 
     const switchedChild = targetChildId !== originalChildId;
 
-    if (switchedChild) await http.readParent(signal, targetChildId);
+    if (switchedChild) await this.readNotificationParent(http, signal, targetChildId);
 
     try {
       const feedKey = targetChildId;
@@ -1076,7 +1191,7 @@ export class InfoMentorClient {
 
       return buildNewsItem(notification, row, feed.skipped);
     } finally {
-      if (switchedChild) await http.readParent(signal, originalChildId);
+      if (switchedChild) await this.readNotificationParent(http, signal, originalChildId);
     }
   }
 

@@ -13,7 +13,12 @@ import {
   fritidsschemaTimesRequestSchema,
   fritidsschemaTimesResultSchema,
 } from "./fritidsschema.js";
-import { calendarEventRequestSchema, calendarEventSchema } from "./calendar.js";
+import {
+  calendarEventRequestSchema,
+  calendarEventSchema,
+  calendarWeekRequestSchema,
+  calendarWeekSchema,
+} from "./calendar.js";
 import {
   newsItemRequestSchema,
   newsItemSchema,
@@ -201,6 +206,17 @@ export function createServer(options: ServerOptions = {}): McpServer {
       (request, ctx) => result(() => client.getCalendarEvent(request, ctx.mcpReq.signal)),
     );
     server.registerTool(
+      "infomentor_get_calendar_week",
+      {
+        description:
+          "Read the authenticated whole week referenced by a CalendarV2 notificationId. Validates the whole_week route and explicit ISO selectedYear/selectedWeek, selects and verifies the notification child, and restores the original selection. Returns calendar_week with exact event identities, inclusive startDate/endDate, and skipped malformed entries; an empty week is valid, but skipped > 0 means incomplete and must not be archived as complete. Does not mark notifications read or change school records. Use infomentor_collect_updates for routine sync.",
+        inputSchema: calendarWeekRequestSchema,
+        outputSchema: calendarWeekSchema,
+        annotations: READ_ONLY,
+      },
+      (request, ctx) => result(() => client.getCalendarWeek(request, ctx.mcpReq.signal)),
+    );
+    server.registerTool(
       "infomentor_get_news_item",
       {
         description:
@@ -227,7 +243,7 @@ export function createServer(options: ServerOptions = {}): McpServer {
     "infomentor_collect_updates",
     {
       description:
-        "Expensive all-child incremental sync for scheduled checks. Reads each registered child’s timetable, inbox/sent message pages and bodies only when a message is new or its summary changed, plus the notification feed; resolves supported NewsItem and CalendarV2 details. Use the saved cursor and save the returned cursor only after downstream handling succeeds. Do not use for one-off child/date/news questions; use infomentor_search_news or the local archive instead. Routine runs should use maxMessagePages: 5; increase only for bounded backfills. Unsupported notification types are explicitly marked `detailStatus: not_supported`. If a supported detail cannot be resolved, the call fails without advancing the cursor so the same notification is retried rather than silently downgraded to metadata. Malformed rows are counted in total `skipped` and by feed in `skippedByFeed`; a partial feed keeps its previous baseline and emits no updates or missing references until a complete read. Other complete feeds remain usable. Restores the original selected child. First call establishes a quiet baseline unless includeExisting is true. Pass the last successfully handled cursor to return only new/changed items and missing feed references; missing does not mean deleted. Cursors expire after 90 days without use and stay on this MCP host. Does not mark messages or notifications read. Maximum 20 pages of 100 messages per folder/child; incomplete scans fail without advancing. childIds describe the contexts where an item was visible, not its recipients or ownership. Same-session local MCP calls are locked; other apps may still change the selected child. The scan has a five-minute deadline and 8 MiB response limit. Covers these supported feeds, not homework, attendance, grades, or attachments.",
+        "Expensive all-child incremental sync for scheduled checks. Reads each registered child’s timetable, inbox/sent message pages and bodies only when a message is new or its summary changed, plus the notification feed; resolves supported NewsItem and CalendarV2 details. Use the saved cursor and save the returned cursor only after downstream handling succeeds. Do not use for one-off child/date/news questions; use infomentor_search_news or the local archive instead. Routine runs should use maxMessagePages: 5; increase only for bounded backfills. Unsupported notification types are explicitly marked `detailStatus: not_supported`. Item-local detail failures return notification metadata with `detailStatus: pending` and a safe `detailError` code/message while other items proceed. Pending details are retried and returned on every scan, even with an unchanged summary or an advanced cursor; recovered details are emitted as resolved. Authentication, account/child context, cancellation and other systemic failures abort without advancing the cursor. A CalendarV2 week-only link has no exact event ID and remains pending rather than guessing a week event. Malformed rows are counted in total `skipped` and by feed in `skippedByFeed`; a partial feed keeps its previous baseline and emits no updates or missing references until a complete read. Other complete feeds remain usable. Restores the original selected child. First call establishes a quiet baseline unless includeExisting is true. Pass the last successfully handled cursor to return only new/changed items and missing feed references; missing does not mean deleted. Cursors expire after 90 days without use and stay on this MCP host. Does not mark messages or notifications read. Maximum 20 pages of 100 messages per folder/child; incomplete scans fail without advancing. childIds describe the contexts where an item was visible, not its recipients or ownership. Same-session local MCP calls are locked; other apps may still change the selected child. The scan has a five-minute deadline and 8 MiB response limit. Covers these supported feeds, not homework, attendance, grades, or attachments.",
       inputSchema: collectRequestSchema,
       outputSchema: collectionSchema,
       annotations: { ...LOCAL_WRITE, readOnlyHint: false },

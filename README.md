@@ -166,13 +166,14 @@ The default server exposes nine everyday account, school-data, news, and collect
 tools. Lower-level message and notification/detail tools are hidden unless the
 host explicitly appends `--allow-advanced-tools` to `serve`:
 
-| Advanced tool                   | Purpose                                                            |
-| ------------------------------- | ------------------------------------------------------------------ |
-| `infomentor_get_messages`       | List messages in a verified child context, with paging and search. |
-| `infomentor_get_message`        | Read one message body in a verified child context.                 |
-| `infomentor_get_notifications`  | Read the available notifications in a verified child context.      |
-| `infomentor_get_news_item`      | Resolve a `NewsItem` notification ID to its full article.          |
-| `infomentor_get_calendar_event` | Resolve a `CalendarV2` notification ID to its full event.          |
+| Advanced tool                   | Purpose                                                                   |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| `infomentor_get_messages`       | List messages in a verified child context, with paging and search.        |
+| `infomentor_get_message`        | Read one message body in a verified child context.                        |
+| `infomentor_get_notifications`  | Read the available notifications in a verified child context.             |
+| `infomentor_get_news_item`      | Resolve a `NewsItem` notification ID to its full article.                 |
+| `infomentor_get_calendar_event` | Resolve a `CalendarV2` notification with an event ID to its exact event.  |
+| `infomentor_get_calendar_week`  | Read the complete linked week for a whole-week `CalendarV2` notification. |
 
 By default the server does not expose account setup mutations either. Append
 `--allow-setup-tools` to `serve` only when the MCP host must perform login,
@@ -184,9 +185,39 @@ With setup tools enabled, the server additionally exposes
 `infomentor_logout`. Login returns immediately; check setup status rather than
 busy-polling.
 
-With both flags enabled, the server exposes all 18 tools. The resulting surface is
-9 tools by default, 14 with advanced tools, 13 with setup tools, or 18 with both
-flags.
+With both flags enabled, the current source server exposes all 19 tools. The surface is
+9 tools by default, 15 with advanced tools, 13 with setup tools, or 19 with both
+flags. Calendar-week support is an unreleased source change; the published `1.1.0`
+package retains its previous tool surface until the next release.
+
+## Calendar notifications: exact events and whole weeks
+
+`infomentor_collect_updates` resolves supported notifications automatically:
+
+- Links containing `eventId` return an exact event with `detail.kind: "calendar"`.
+- `calendarv2/whole_week` links without an event ID return
+  `detail.kind: "calendar_week"`, with the notification, verified `childId`,
+  Monday–Sunday `startDate`/`endDate`, `events`, `skipped`, and `retrievedAt`.
+  Each event preserves its actual ID, dates, times, all-day form, and text.
+  Multi-day events overlapping the requested week retain their original dates.
+  An empty week is a valid result, not a missing event.
+
+For a targeted diagnostic read, enable advanced tools and call
+`infomentor_get_calendar_week` with the positive numeric `notificationId` from
+InfoMentor. The notification must contain an explicit valid ISO year/week and
+whole-week route. The tool derives and verifies the child's context, reads the
+linked week, and restores the original selection. It does not guess an event or
+fall back to another week. `infomentor_get_calendar_event` remains exact-event-only.
+
+Check `skipped` before treating a targeted week read as complete. The collector
+returns incomplete week feeds as `detailStatus: "pending"` with safe
+`detailError` metadata and retries them, even after unrelated cursor advancement.
+Consumers must retain these pending items and must not acknowledge or archive
+partial details as complete. Authentication, account/child-context drift,
+cancellation, and systemic failures still fail closed.
+
+Whole-week reads are read-only InfoMentor data. They do not create Google Calendar
+events, mark notifications read, or modify school records.
 
 ## Tools
 
@@ -227,9 +258,16 @@ flags.
   scans supported timetables, message summaries, and notifications for every
   registered child, fetches message bodies only for new or changed summaries,
   automatically resolves `NewsItem` and `CalendarV2` references, and marks
-  unsupported notification types explicitly. If supported detail resolution
-  fails, the cursor is not advanced, so the item is retried rather than silently
-  returned as metadata-only. Save its returned cursor only after handling or
+  unsupported notification types explicitly. Item-local detail failures return
+  `detailStatus: "pending"` and `detailError: {code, message}` with safe messages;
+  other valid items remain available and the cursor may advance. Pending items
+  are retried and returned on every scan, even when their summaries are unchanged,
+  including on a quiet first baseline. Recovered details are emitted as resolved.
+  Authentication, session/account/child identity, cancellation and other systemic
+  failures still abort without advancing a cursor. CalendarV2 links containing
+  only a selected year/week have no exact event ID: they stay pending rather than
+  guessing which calendar event the notification references. Save its returned
+  cursor only after handling or
   delivering results; retry the previous cursor if delivery fails. Routine runs
   should use `maxMessagePages: 5`; increase it only for a bounded backfill.
 - The lower-level message and notification/detail tools are available only with

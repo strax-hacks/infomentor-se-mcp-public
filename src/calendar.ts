@@ -1,6 +1,6 @@
 import { parseDocument } from "htmlparser2";
 import { z } from "zod";
-import { notificationSchema } from "./session.js";
+import { InfoMentorError, notificationSchema } from "./session.js";
 
 const positiveInteger = z
   .union([
@@ -173,6 +173,55 @@ export const calendarEventSchema = z.object({
 });
 
 export type CalendarEvent = z.infer<typeof calendarEventSchema>;
+
+export const calendarWeekRequestSchema = calendarEventRequestSchema;
+export type CalendarWeekRequest = z.input<typeof calendarWeekRequestSchema>;
+export const calendarWeekSchema = z.object({
+  kind: z.literal("calendar_week"),
+  notification: notificationSchema,
+  childId: z.string().min(1),
+  startDate: z.string(),
+  endDate: z.string(),
+  events: z.array(calendarEventSchema),
+  skipped: z.number().int().nonnegative(),
+  retrievedAt: z.iso.datetime(),
+});
+export type CalendarWeek = z.infer<typeof calendarWeekSchema>;
+
+export function calendarWeekRangeFromNotification(url: string): {
+  startDate: string;
+  endDate: string;
+} {
+  const fail = (): never => {
+    throw new InfoMentorError(
+      "UNEXPECTED_PAGE",
+      "InfoMentor returned an invalid CalendarV2 whole-week route or ISO week.",
+    );
+  };
+  if (!/^\/?#\/calendarv2\/whole_week\?/i.test(url)) fail();
+  const params = new URLSearchParams(url.slice(url.indexOf("?") + 1));
+  const yearValue = params.get("selectedYear");
+  const weekValue = params.get("selectedWeek");
+  if (
+    params.getAll("selectedYear").length !== 1 ||
+    params.getAll("selectedWeek").length !== 1 ||
+    !yearValue ||
+    !/^\d{4}$/.test(yearValue) ||
+    !weekValue ||
+    !/^\d{1,2}$/.test(weekValue)
+  )
+    fail();
+  const year = Number(yearValue);
+  const week = Number(weekValue);
+  if (year < 1000 || week < 1 || week > 53) fail();
+  const start = isoWeekStart(year, week);
+  const thursday = new Date(start);
+  thursday.setUTCDate(start.getUTCDate() + 3);
+  if (thursday.getUTCFullYear() !== year) fail();
+  const end = new Date(start);
+  end.setUTCDate(start.getUTCDate() + 6);
+  return { startDate: dateParts(start), endDate: dateParts(end) };
+}
 
 /** Extract the calendar event ID embedded in a CalendarV2 hash route. */
 export function calendarEventIdFromNotificationUrl(url: string): number | undefined {

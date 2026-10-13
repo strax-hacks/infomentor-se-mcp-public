@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Item-local notification detail failures return `detailStatus: "pending"` with
+  a safe `detailError` while complete items can proceed. Pending details retry
+  on unchanged scans after cursor advancement and emit recovered content.
+- Authentication, account/child context, cancellation and other systemic failures
+  continue to fail closed without advancing the collector cursor.
+- Added the opt-in read-only `infomentor_get_calendar_week` and public calendar
+  week schemas/types. Whole-week CalendarV2 links now resolve automatically in
+  high-level collection as `detail.kind: "calendar_week"`, preserving exact
+  entries and allowing empty weeks without guessing one event.
+- Week reads validate explicit ISO year/week, verify child/account context after
+  the feed read, share calendar feed caches, and restore the original selection.
+  Incomplete feeds stay pending and are retried; exact-event reads remain strict.
+- The source tool surface is 9 default, 15 advanced, 13 setup, or 19 combined.
+  These changes are not yet published in npm `1.1.0`.
+
 ## 1.1.0
 
 - Child-context-dependent overview, message, and notification reads can receive

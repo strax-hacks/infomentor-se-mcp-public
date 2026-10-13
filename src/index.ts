@@ -48,3 +48,16 @@ export type {
 export { newsItemRequestSchema, newsItemSchema } from "./news.js";
 
 export type { NewsItemRequest, NewsItem } from "./news.js";
+
+export {
+  calendarEventRequestSchema,
+  calendarEventSchema,
+  calendarWeekRequestSchema,
+  calendarWeekSchema,
+} from "./calendar.js";
+export type {
+  CalendarEventRequest,
+  CalendarEvent,
+  CalendarWeekRequest,
+  CalendarWeek,
+} from "./calendar.js";

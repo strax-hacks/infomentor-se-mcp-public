@@ -8,7 +8,13 @@ import {
   writePrivateFile,
 } from "./shared/session-store/index.js";
 import { z } from "zod";
-import { calendarEventSchema, type CalendarEvent } from "./calendar.js";
+import {
+  calendarEventSchema,
+  calendarEventIdFromNotificationUrl,
+  calendarWeekSchema,
+  type CalendarEvent,
+  type CalendarWeek,
+} from "./calendar.js";
 import { newsItemSchema, type NewsItem } from "./news.js";
 import {
   InfoMentorError,
@@ -45,13 +51,20 @@ const collectedCalendarDetailSchema = calendarEventSchema
 const notificationDetailSchema = z.discriminatedUnion("kind", [
   collectedNewsDetailSchema,
   collectedCalendarDetailSchema,
+  calendarWeekSchema,
 ]);
 
 const collectedNotificationSchema = notificationSchema
   .omit({ currentlySelectedPupil: true })
   .extend({
-    detailStatus: z.enum(["resolved", "not_supported"]),
+    detailStatus: z.enum(["resolved", "not_supported", "pending"]),
     detail: notificationDetailSchema.optional(),
+    detailError: z
+      .object({
+        code: z.enum(["INVALID_CONFIGURATION", "UNEXPECTED_PAGE", "NOT_FOUND"]),
+        message: z.string(),
+      })
+      .optional(),
   });
 
 const kindSchema = z.enum(["child", "timetable", "message", "notification"]);
@@ -161,6 +174,11 @@ export type CollectionSource = {
     signal: AbortSignal,
     notification?: z.infer<typeof notificationSchema>,
   ) => Promise<CalendarEvent>;
+  resolveCalendarWeek?: (
+    notificationId: number,
+    signal: AbortSignal,
+    notification?: z.infer<typeof notificationSchema>,
+  ) => Promise<CalendarWeek>;
 };
 
 const fingerprintSchema = referenceSchema.omit({ childIds: true }).extend({
@@ -458,14 +476,43 @@ async function resolveCollectedNotification(
           `InfoMentor could not resolve NewsItem notification ${item.id}; no cursor was advanced.`,
           error.retryAfterMs,
         );
-      throw new InfoMentorError(
-        "UNEXPECTED_PAGE",
-        `InfoMentor returned invalid details for NewsItem notification ${item.id}; no cursor was advanced.`,
-      );
+      if (error instanceof z.ZodError)
+        throw new InfoMentorError(
+          "UNEXPECTED_PAGE",
+          "InfoMentor returned invalid notification details.",
+        );
+      throw error;
     }
   }
 
   if (item.type === "CalendarV2" || item.type === "CalendarV2EventCreated") {
+    const wholeWeek =
+      !calendarEventIdFromNotificationUrl(item.url) &&
+      /^\/?#\/calendarv2\/whole_week\?/i.test(item.url);
+    if (wholeWeek) {
+      if (!source.resolveCalendarWeek)
+        throw new InfoMentorError(
+          "INVALID_CONFIGURATION",
+          "The collection source cannot resolve calendar weeks.",
+        );
+      const detail = calendarWeekSchema.parse(
+        await source.resolveCalendarWeek(item.id, signal, item),
+      );
+      return collectedNotificationSchema.parse({
+        ...item,
+        detailStatus: detail.skipped > 0 ? "pending" : "resolved",
+        detail,
+        ...(detail.skipped > 0
+          ? {
+              detailError: {
+                code: "UNEXPECTED_PAGE",
+                message:
+                  "InfoMentor calendar week contains malformed entries; collection will retry this item.",
+              },
+            }
+          : {}),
+      });
+    }
     if (!source.resolveCalendarEvent)
       throw new InfoMentorError(
         "INVALID_CONFIGURATION",
@@ -487,10 +534,12 @@ async function resolveCollectedNotification(
           `InfoMentor could not resolve ${item.type} notification ${item.id}; no cursor was advanced.`,
           error.retryAfterMs,
         );
-      throw new InfoMentorError(
-        "UNEXPECTED_PAGE",
-        `InfoMentor returned invalid details for ${item.type} notification ${item.id}; no cursor was advanced.`,
-      );
+      if (error instanceof z.ZodError)
+        throw new InfoMentorError(
+          "UNEXPECTED_PAGE",
+          "InfoMentor returned invalid notification details.",
+        );
+      throw error;
     }
   }
 
@@ -561,9 +610,11 @@ export async function collectUpdates(
     recordCurrent(fingerprint);
 
     const previousFingerprint = previousItems.get(fingerprintKey(fingerprint));
+    const pending = update.kind === "notification" && update.data.detailStatus === "pending";
     if (
-      (!previous && !input.includeExisting) ||
-      (previousFingerprint !== undefined && fingerprintsEqual(previousFingerprint, fingerprint))
+      !pending &&
+      ((!previous && !input.includeExisting) ||
+        (previousFingerprint !== undefined && fingerprintsEqual(previousFingerprint, fingerprint)))
     )
       return;
     const groupKey = JSON.stringify([referenceKey(fingerprint), fingerprint.hash]);
@@ -649,7 +700,29 @@ export async function collectUpdates(
           detailPromise = resolveCollectedNotification(item, source, signal);
           resolvedNotificationCache.set(resolutionKey, detailPromise);
         }
-        const data = await detailPromise;
+        let data: z.infer<typeof collectedNotificationSchema>;
+        try {
+          data = await detailPromise;
+        } catch (error) {
+          throwIfAborted(signal);
+          // Detail errors are item-local only while the authenticated account,
+          // roster and selected child remain exactly as expected.
+          confirmParent(checkedParent(await source.getParent(signal)), initial, child.id);
+          if (
+            !(error instanceof InfoMentorError) ||
+            !["INVALID_CONFIGURATION", "UNEXPECTED_PAGE", "NOT_FOUND"].includes(error.code)
+          )
+            throw error;
+          data = collectedNotificationSchema.parse({
+            ...item,
+            detailStatus: "pending",
+            detailError: {
+              code: error.code,
+              message:
+                "InfoMentor notification details are unavailable; collection will retry this item.",
+            },
+          });
+        }
 
         add(
           {
@@ -659,7 +732,9 @@ export async function collectUpdates(
             data,
           },
           child.id,
-          { summaryHash },
+          // Only completed details may use the unchanged-summary fast path.
+          // Pending metadata retains a fingerprint but is retried every scan.
+          data.detailStatus === "pending" ? {} : { summaryHash },
         );
       }
 

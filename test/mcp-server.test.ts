@@ -7,6 +7,18 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { z } from "zod";
 
+test("public barrel exports calendar event and week contracts", async () => {
+  const api = await import("../src/index.js");
+  for (const name of [
+    "calendarEventRequestSchema",
+    "calendarEventSchema",
+    "calendarWeekRequestSchema",
+    "calendarWeekSchema",
+  ]) {
+    assert.ok(name in api, `Missing public export: ${name}`);
+  }
+});
+
 test("the source MCP server speaks stdio, registers tools, and fails closed without a session", async () => {
   const directory = await mkdtemp(join(tmpdir(), "infomentor-mcp-source-"));
   const client = new Client({ name: "infomentor-source-smoke", version: "1.0.0" });
@@ -46,6 +58,12 @@ test("the source MCP server speaks stdio, registers tools, and fails closed with
       "infomentor_set_fritidsschema_times",
     ]);
     assert.ok(tools.every((tool) => tool.outputSchema));
+    const collector = tools.find((tool) => tool.name === "infomentor_collect_updates");
+    const outputSchema = JSON.stringify(collector?.outputSchema);
+    assert.match(outputSchema, /"pending"/);
+    assert.match(outputSchema, /"detailError"/);
+    assert.match(outputSchema, /"NOT_FOUND"/);
+    assert.match(collector?.description ?? "", /retried and returned on every scan/);
     const overviewTool = tools.find((tool) => tool.name === "infomentor_get_overview");
     const overviewInput = overviewTool?.inputSchema as
       | { properties?: Record<string, unknown> }
@@ -99,6 +117,7 @@ test("advanced notification and message tools are opt-in", async () => {
     assert.deepEqual(tools.map((tool) => tool.name).toSorted(), [
       "infomentor_collect_updates",
       "infomentor_get_calendar_event",
+      "infomentor_get_calendar_week",
       "infomentor_get_fritidsschema",
       "infomentor_get_fritidsschema_comment",
       "infomentor_get_message",

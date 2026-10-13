@@ -62,6 +62,65 @@ const calendarEvent = {
   url: null,
 };
 
+test("week-only CalendarV2 links never guess an event from the week feed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "infomentor-calendar-week-only-"));
+  const sessionFile = join(directory, "session.json");
+  const saved = captureSession(new CookieJar());
+  saved.accountId = "parent";
+  saved.selectedChildId = "child-2";
+  await writeSession(saved, sessionFile);
+  let calendarReads = 0;
+  const fetcher = async (input: string | URL | Request): Promise<Response> => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    if (url.pathname === "/") return new Response(parentHtml("child-2"));
+    if (url.pathname === "/NotificationApp/NotificationApp/appData")
+      return Response.json({
+        notifications: [
+          { ...notification, url: "/#/calendarv2/whole_week?selectedYear=2025&selectedWeek=2" },
+        ],
+      });
+    calendarReads++;
+    return Response.json([calendarEvent]);
+  };
+  const client = new InfoMentorClient({ sessionFile, fetch: fetcher });
+  try {
+    await assert.rejects(client.getCalendarEvent({ notificationId: notification.id }), {
+      code: "NOT_FOUND",
+      message:
+        "This CalendarV2 notification links to a week without an event ID; an exact event cannot be safely resolved.",
+    });
+    assert.equal(calendarReads, 0);
+  } finally {
+    await client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("CalendarV2 child selection failures are systemic, not item-local", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "infomentor-calendar-context-"));
+  const sessionFile = join(directory, "session.json");
+  const saved = captureSession(new CookieJar());
+  saved.accountId = "parent";
+  saved.selectedChildId = "child-2";
+  await writeSession(saved, sessionFile);
+  const fetcher = async (input: string | URL | Request): Promise<Response> => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    if (url.pathname === "/") return new Response(parentHtml("child-2"));
+    if (url.pathname === "/NotificationApp/NotificationApp/appData")
+      return Response.json({ notifications: [notification] });
+    return new Response("Synthetic invalid selection response");
+  };
+  const client = new InfoMentorClient({ sessionFile, fetch: fetcher });
+  try {
+    await assert.rejects(client.getCalendarEvent({ notificationId: notification.id }), {
+      code: "INVALID_SESSION",
+    });
+  } finally {
+    await client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("CalendarV2 resolution selects the notification child, reads the selected week, and restores selection", async () => {
   const directory = await mkdtemp(join(tmpdir(), "infomentor-calendar-client-"));
   const sessionFile = join(directory, "session.json");

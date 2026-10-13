@@ -239,6 +239,241 @@ function sourceFor(sessionFile: string) {
   return { source: enrichedSource, state };
 }
 
+test("collector resolves whole-week links to complete typed calendar-week details", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "infomentor-collect-week-"));
+  try {
+    const { source, state } = sourceFor(join(directory, "session.json"));
+    state.notificationKind = "CalendarV2EventCreated";
+    state.notificationUrl = "/#/calendarv2/whole_week?selectedYear=2026&selectedWeek=37";
+    const event = await source.resolveCalendarEvent(1);
+    let reads = 0;
+    source.resolveCalendarWeek = async (_id, _signal, notification) => {
+      reads++;
+      return {
+        kind: "calendar_week",
+        notification: notification!,
+        childId: "first",
+        startDate: "2026-09-07",
+        endDate: "2026-09-13",
+        events: [event],
+        skipped: 0,
+        retrievedAt: "2026-09-11T08:00:00.000Z",
+      };
+    };
+    const result = await collectUpdates({ includeExisting: true }, source);
+    const notice = result.updates.find((item) => item.kind === "notification");
+    assert.ok(notice);
+    assert.equal(notice.data.detailStatus, "resolved");
+    assert.equal(notice.data.detail?.kind, "calendar_week");
+    assert.equal(reads, 1);
+    const next = await collectUpdates({ cursor: result.cursor }, source);
+    assert.equal(reads, 1);
+    assert.deepEqual(next.updates, []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("incomplete calendar-week details stay pending and retry with an unchanged summary", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "infomentor-week-retry-"));
+  try {
+    const { source, state } = sourceFor(join(directory, "session.json"));
+    state.notificationKind = "CalendarV2EventCreated";
+    state.notificationUrl = "/#/calendarv2/whole_week?selectedYear=2026&selectedWeek=37";
+    let reads = 0;
+    source.resolveCalendarWeek = async (_id, _signal, notification) => ({
+      kind: "calendar_week",
+      notification: notification!,
+      childId: "first",
+      startDate: "2026-09-07",
+      endDate: "2026-09-13",
+      events: [],
+      skipped: ++reads <= 2 ? 1 : 0,
+      retrievedAt: "2026-09-11T08:00:00.000Z",
+    });
+    const first = await collectUpdates({ includeExisting: true }, source);
+    const notice = first.updates.find((item) => item.kind === "notification");
+    assert.ok(notice);
+    assert.equal(notice.data.detailStatus, "pending");
+    assert.equal(notice.data.detail?.kind, "calendar_week");
+    const retry = await collectUpdates({ cursor: first.cursor }, source);
+    assert.equal(reads, 2);
+    assert.ok(
+      retry.updates.some(
+        (item) => item.kind === "notification" && item.data.detailStatus === "pending",
+      ),
+    );
+    const recovered = await collectUpdates({ cursor: retry.cursor }, source);
+    assert.equal(reads, 3);
+    assert.ok(
+      recovered.updates.some(
+        (item) => item.kind === "notification" && item.data.detailStatus === "resolved",
+      ),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("item detail failure retains metadata alongside good items", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "infomentor-pending-"));
+  try {
+    const { source, state } = sourceFor(join(directory, "session.json"));
+    state.notificationKind = "CalendarV2EventCreated";
+    source.resolveCalendarEvent = async () => {
+      throw new InfoMentorError("UNEXPECTED_PAGE", "PRIVATE upstream text must not escape");
+    };
+    const result = await collectUpdates({ includeExisting: true }, source);
+    collectionSchema.parse(result);
+    assert.ok(result.updates.some((item) => item.kind === "message"));
+    const notice = result.updates.find((item) => item.kind === "notification");
+    assert.ok(notice);
+    assert.equal(notice.data.detailStatus, "pending");
+    assert.equal(notice.data.detail, undefined);
+    assert.deepEqual(notice.data.detailError, {
+      code: "UNEXPECTED_PAGE",
+      message: "InfoMentor notification details are unavailable; collection will retry this item.",
+    });
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE upstream/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("unchanged pending details retry after cursor advancement and emit recovered content", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "infomentor-retry-"));
+  try {
+    const { source, state } = sourceFor(join(directory, "session.json"));
+    state.notificationKind = "NewsItem";
+    const resolve = source.resolveNewsItem;
+    const getNotifications = source.getNotifications;
+    source.getNotifications = async (signal) => {
+      const feed = await getNotifications(signal);
+      const first = feed.notifications[0]!;
+      return { ...feed, notifications: [first, { ...first, id: 2 }] };
+    };
+    let reads = 0;
+    let failing = true;
+    source.resolveNewsItem = async (id, signal) => {
+      if (id === 1) {
+        reads++;
+        if (failing) throw new InfoMentorError("INVALID_CONFIGURATION", "Synthetic missing ID");
+      }
+      return resolve(id, signal);
+    };
+    const baseline = await collectUpdates({ includeExisting: true }, source);
+    assert.ok(
+      baseline.updates.some(
+        (item) => item.kind === "notification" && item.data.detailStatus === "resolved",
+      ),
+    );
+    state.messageVersion = 1;
+    const delta = await collectUpdates({ cursor: baseline.cursor }, source);
+    assert.notEqual(delta.cursor, baseline.cursor);
+    assert.equal(reads, 2);
+    const pending = delta.updates.filter((item) => item.kind === "notification");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.data.detailStatus, "pending");
+    const retry = await collectUpdates({ cursor: delta.cursor }, source);
+    assert.equal(reads, 3);
+    assert.ok(
+      retry.updates.some(
+        (item) => item.kind === "notification" && item.data.detailStatus === "pending",
+      ),
+    );
+    failing = false;
+    const recovered = await collectUpdates({ cursor: retry.cursor }, source);
+    assert.equal(reads, 4);
+    const notice = recovered.updates.find((item) => item.kind === "notification");
+    assert.ok(notice);
+    assert.equal(notice.data.detailStatus, "resolved");
+    assert.equal(notice.data.detail?.kind, "news");
+    assert.equal(notice.data.detailError, undefined);
+    const unchanged = await collectUpdates({ cursor: recovered.cursor }, source);
+    assert.equal(reads, 4);
+    assert.deepEqual(unchanged.updates, []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("systemic resolver failures abort without a cursor", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "infomentor-fail-closed-"));
+  try {
+    const failures = [
+      ...(
+        [
+          "LOGIN_REQUIRED",
+          "INVALID_SESSION",
+          "CANCELLED",
+          "ACCESS_DENIED",
+          "CHALLENGE_REQUIRED",
+          "RATE_LIMITED",
+          "NETWORK_ERROR",
+        ] as const
+      ).map((code) => new InfoMentorError(code, "Synthetic systemic error")),
+      new Error("Unknown systemic failure"),
+    ];
+    for (const [index, failure] of failures.entries()) {
+      const sessionFile = join(directory, `session-${index}.json`);
+      const { source, state } = sourceFor(sessionFile);
+      state.notificationKind = "NewsItem";
+      source.resolveNewsItem = async () => {
+        throw failure;
+      };
+      await assert.rejects(collectUpdates({ includeExisting: true }, source));
+      await assert.rejects(stat(sessionFile + ".collections"), { code: "ENOENT" });
+    }
+    for (const drift of ["account", "selection", "cancel"] as const) {
+      const sessionFile = join(directory, drift + ".json");
+      const { source, state } = sourceFor(sessionFile);
+      state.notificationKind = "CalendarV2EventCreated";
+      source.signal = state.abort.signal;
+      source.resolveCalendarEvent = async () => {
+        if (drift === "account") state.account = "other-parent";
+        if (drift === "selection") state.selected = "second";
+        if (drift === "cancel") state.abort.abort();
+        throw new InfoMentorError("UNEXPECTED_PAGE", "Synthetic resolution failure");
+      };
+      await assert.rejects(collectUpdates({ includeExisting: true }, source));
+      await assert.rejects(stat(sessionFile + ".collections"), { code: "ENOENT" });
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("pending baseline surfaces every supported item-local error and absent resolver", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "infomentor-item-errors-"));
+  try {
+    for (const [index, code] of (
+      ["INVALID_CONFIGURATION", "UNEXPECTED_PAGE", "NOT_FOUND"] as const
+    ).entries()) {
+      const { source, state } = sourceFor(join(directory, `${index}.json`));
+      state.notificationKind = "CalendarV2EventCreated";
+      source.resolveCalendarEvent = async () => {
+        throw new InfoMentorError(code, "Synthetic failure");
+      };
+      const result = await collectUpdates({}, source);
+      const notice = result.updates.find((item) => item.kind === "notification");
+      assert.ok(notice);
+      assert.equal(notice.data.detailStatus, "pending");
+      assert.equal(notice.data.detailError?.code, code);
+    }
+    const { source, state } = sourceFor(join(directory, "absent.json"));
+    state.notificationKind = "NewsItem";
+    delete (source as CollectionSource).resolveNewsItem;
+    const result = await collectUpdates({}, source);
+    assert.ok(
+      result.updates.some(
+        (item) => item.kind === "notification" && item.data.detailStatus === "pending",
+      ),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 const subtest = async (_name: string, work: () => Promise<void>): Promise<void> => work();
 
 test("collection snapshots replay deltas, preserve context, and fail without advancing", async () => {
